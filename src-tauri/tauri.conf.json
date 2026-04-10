@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "动漫工作室",
+  "productName": "摸鱼动漫工作室",
   "version": "0.1.0",
-  "identifier": "com.animetools.studio",
+  "identifier": "com.moyu.anime.studio",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "动漫工作室 - Anime Studio",
+        "title": "摸鱼动漫工作室",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
