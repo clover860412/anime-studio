@@ -1,0 +1,789 @@
+import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
+import { AppConfig, Project, Shot, Character, Scene, Item, ViewType, ModelPreset, defaultConfig, DEFAULT_API_BASE, ProjectTab } from '../types';
+
+const CONFIG_KEY = 'anime-studio-config';
+const PROJECTS_KEY = 'anime-studio-projects';
+
+// State
+interface AppState {
+  config: AppConfig;
+  projects: Project[];
+  currentView: ViewType;
+  currentProjectId: string | null;
+  currentProjectTab: ProjectTab;
+  selectedShotId: string | null;
+  toast: { message: string; type: 'success' | 'error' } | null;
+  isLoading: boolean;
+  batchConcurrency: number;  // 批量并发数
+  // 图片生成任务状态（用于防止重复提交和显示状态）
+  imageGenTasks: Record<string, {
+    status: 'idle' | 'queued' | 'processing' | 'completed' | 'failed' | 'timeout';
+    startTime: number;
+    error?: string;
+  }>;
+}
+
+// Actions
+type Action =
+  | { type: 'SET_CONFIG'; payload: AppConfig }
+  | { type: 'UPDATE_BASIC'; payload: Partial<AppConfig['basic']> }
+  | { type: 'UPDATE_PROMPTS'; payload: Partial<AppConfig['prompts']> }
+  | { type: 'ADD_MODEL_PRESET'; payload: ModelPreset }
+  | { type: 'UPDATE_MODEL_PRESET'; payload: ModelPreset }
+  | { type: 'DELETE_MODEL_PRESET'; payload: string }
+  | { type: 'RESET_CONFIG' }
+  | { type: 'SET_VIEW'; payload: ViewType }
+  | { type: 'SET_CURRENT_PROJECT'; payload: string | null }
+  | { type: 'SET_PROJECT_TAB'; payload: ProjectTab }
+  | { type: 'SET_SELECTED_SHOT'; payload: string | null }
+  | { type: 'ADD_PROJECT'; payload: Project }
+  | { type: 'UPDATE_PROJECT'; payload: Project }
+  | { type: 'DELETE_PROJECT'; payload: string }
+  | { type: 'SET_PROJECTS'; payload: Project[] }
+  | { type: 'ADD_SHOT'; payload: { projectId: string; shot: Shot } }
+  | { type: 'UPDATE_SHOT'; payload: { projectId: string; shot: Shot } }
+  | { type: 'DELETE_SHOT'; payload: { projectId: string; shotId: string } }
+  | { type: 'SET_SHOTS'; payload: { projectId: string; shots: Shot[] } }
+  | { type: 'UPDATE_SHOT_IMAGE'; payload: { projectId: string; shotId: string; imageFile: string } }
+  | { type: 'UPDATE_SHOT_VIDEO'; payload: { projectId: string; shotId: string; videoFile: string; videoTaskId?: string } }
+  | { type: 'UPDATE_PROJECT_SYNOPSIS'; payload: { projectId: string; synopsis: string } }
+  | { type: 'SET_CHARACTERS'; payload: { projectId: string; characters: Character[] } }
+  | { type: 'ADD_CHARACTER'; payload: { projectId: string; character: Character } }
+  | { type: 'UPDATE_CHARACTER'; payload: { projectId: string; character: Character } }
+  | { type: 'DELETE_CHARACTER'; payload: { projectId: string; characterId: string } }
+  | { type: 'UPDATE_CHARACTER_IMAGE'; payload: { projectId: string; characterId: string; imageFile: string } }
+  | { type: 'UPDATE_CHARACTER_REFERENCE'; payload: { projectId: string; characterId: string; referenceImage: string } }
+  | { type: 'SET_SCENES'; payload: { projectId: string; scenes: Scene[] } }
+  | { type: 'ADD_SCENE'; payload: { projectId: string; scene: Scene } }
+  | { type: 'UPDATE_SCENE'; payload: { projectId: string; scene: Scene } }
+  | { type: 'DELETE_SCENE'; payload: { projectId: string; sceneId: string } }
+  | { type: 'UPDATE_SCENE_IMAGE'; payload: { projectId: string; sceneId: string; imageFile: string } }
+  | { type: 'UPDATE_SCENE_REFERENCE'; payload: { projectId: string; sceneId: string; referenceImage: string } }
+  | { type: 'SET_ITEMS'; payload: { projectId: string; items: Item[] } }
+  | { type: 'ADD_ITEM'; payload: { projectId: string; item: Item } }
+  | { type: 'UPDATE_ITEM'; payload: { projectId: string; item: Item } }
+  | { type: 'DELETE_ITEM'; payload: { projectId: string; itemId: string } }
+  | { type: 'UPDATE_ITEM_IMAGE'; payload: { projectId: string; itemId: string; imageFile: string } }
+  | { type: 'UPDATE_ITEM_REFERENCE'; payload: { projectId: string; itemId: string; referenceImage: string } }
+  | { type: 'SET_IMAGE_GEN_STATUS'; payload: { shotId: string; status: 'idle' | 'queued' | 'processing' | 'completed' | 'failed' | 'timeout'; error?: string } }
+  | { type: 'CLEAR_IMAGE_GEN_STATUS'; payload: string }
+  | { type: 'SHOW_TOAST'; payload: { message: string; type: 'success' | 'error' } }
+  | { type: 'HIDE_TOAST' }
+  | { type: 'SET_LOADING'; payload: boolean }
+  | { type: 'SET_BATCH_CONCURRENCY'; payload: number };
+
+// Reducer
+function appReducer(state: AppState, action: Action): AppState {
+  switch (action.type) {
+    case 'SET_CONFIG':
+      return { ...state, config: action.payload };
+    case 'UPDATE_BASIC':
+      return { ...state, config: { ...state.config, basic: { ...state.config.basic, ...action.payload } } };
+    case 'UPDATE_PROMPTS':
+      return { ...state, config: { ...state.config, prompts: { ...state.config.prompts, ...action.payload } } };
+    case 'ADD_MODEL_PRESET':
+      return { ...state, config: { ...state.config, modelPresets: [...state.config.modelPresets, action.payload] } };
+    case 'UPDATE_MODEL_PRESET':
+      return {
+        ...state,
+        config: {
+          ...state.config,
+          modelPresets: state.config.modelPresets.map(p => p.id === action.payload.id ? action.payload : p)
+        }
+      };
+    case 'DELETE_MODEL_PRESET':
+      return {
+        ...state,
+        config: { ...state.config, modelPresets: state.config.modelPresets.filter(p => p.id !== action.payload) }
+      };
+    case 'RESET_CONFIG':
+      return { ...state, config: defaultConfig };
+    case 'SET_VIEW':
+      return { ...state, currentView: action.payload };
+    case 'SET_CURRENT_PROJECT':
+      return { ...state, currentProjectId: action.payload, selectedShotId: null };
+    case 'SET_PROJECT_TAB':
+      return { ...state, currentProjectTab: action.payload };
+    case 'SET_SELECTED_SHOT':
+      return { ...state, selectedShotId: action.payload };
+    case 'ADD_PROJECT':
+      return { ...state, projects: [action.payload, ...state.projects] };
+    case 'UPDATE_PROJECT':
+      return {
+        ...state,
+        projects: state.projects.map(p => p.id === action.payload.id ? action.payload : p)
+      };
+    case 'DELETE_PROJECT':
+      return { ...state, projects: state.projects.filter(p => p.id !== action.payload) };
+    case 'SET_PROJECTS':
+      return { ...state, projects: action.payload };
+    case 'ADD_SHOT':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, shots: [...p.shots, action.payload.shot] }
+            : p
+        )
+      };
+    case 'UPDATE_SHOT':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, shots: p.shots.map(s => s.id === action.payload.shot.id ? action.payload.shot : s) }
+            : p
+        )
+      };
+    case 'DELETE_SHOT':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, shots: p.shots.filter(s => s.id !== action.payload.shotId) }
+            : p
+        )
+      };
+    case 'SET_SHOTS':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, shots: action.payload.shots }
+            : p
+        )
+      };
+    case 'UPDATE_SHOT_IMAGE':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? {
+                ...p,
+                shots: p.shots.map(s =>
+                  s.id === action.payload.shotId ? { ...s, imageFile: action.payload.imageFile } : s
+                )
+              }
+            : p
+        )
+      };
+    case 'UPDATE_SHOT_VIDEO':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? {
+                ...p,
+                shots: p.shots.map(s =>
+                  s.id === action.payload.shotId ? { ...s, videoFile: action.payload.videoFile, videoTaskId: action.payload.videoTaskId } : s
+                )
+              }
+            : p
+        )
+      };
+    case 'UPDATE_PROJECT_SYNOPSIS':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, synopsis: action.payload.synopsis }
+            : p
+        )
+      };
+    case 'SET_CHARACTERS':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, characters: action.payload.characters }
+            : p
+        )
+      };
+    case 'ADD_CHARACTER':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, characters: [...p.characters, action.payload.character] }
+            : p
+        )
+      };
+    case 'UPDATE_CHARACTER':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, characters: p.characters.map(c => c.id === action.payload.character.id ? action.payload.character : c) }
+            : p
+        )
+      };
+    case 'DELETE_CHARACTER':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, characters: p.characters.filter(c => c.id !== action.payload.characterId) }
+            : p
+        )
+      };
+    case 'UPDATE_CHARACTER_IMAGE':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, characters: p.characters.map(c => c.id === action.payload.characterId ? { ...c, imageFile: action.payload.imageFile } : c) }
+            : p
+        )
+      };
+    case 'UPDATE_CHARACTER_REFERENCE':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, characters: p.characters.map(c => c.id === action.payload.characterId ? { ...c, referenceImage: action.payload.referenceImage } : c) }
+            : p
+        )
+      };
+    case 'SET_SCENES':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, scenes: action.payload.scenes }
+            : p
+        )
+      };
+    case 'ADD_SCENE':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, scenes: [...p.scenes, action.payload.scene] }
+            : p
+        )
+      };
+    case 'UPDATE_SCENE':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, scenes: p.scenes.map(s => s.id === action.payload.scene.id ? action.payload.scene : s) }
+            : p
+        )
+      };
+    case 'DELETE_SCENE':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, scenes: p.scenes.filter(s => s.id !== action.payload.sceneId) }
+            : p
+        )
+      };
+    case 'UPDATE_SCENE_IMAGE':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, scenes: p.scenes.map(s => s.id === action.payload.sceneId ? { ...s, imageFile: action.payload.imageFile } : s) }
+            : p
+        )
+      };
+    case 'UPDATE_SCENE_REFERENCE':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, scenes: p.scenes.map(s => s.id === action.payload.sceneId ? { ...s, referenceImage: action.payload.referenceImage } : s) }
+            : p
+        )
+      };
+    case 'SET_ITEMS':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, items: action.payload.items }
+            : p
+        )
+      };
+    case 'ADD_ITEM':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, items: [...(p.items || []), action.payload.item] }
+            : p
+        )
+      };
+    case 'UPDATE_ITEM':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, items: (p.items || []).map(i => i.id === action.payload.item.id ? action.payload.item : i) }
+            : p
+        )
+      };
+    case 'DELETE_ITEM':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, items: (p.items || []).filter(i => i.id !== action.payload.itemId) }
+            : p
+        )
+      };
+    case 'UPDATE_ITEM_IMAGE':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, items: (p.items || []).map(i => i.id === action.payload.itemId ? { ...i, imageFile: action.payload.imageFile } : i) }
+            : p
+        )
+      };
+    case 'UPDATE_ITEM_REFERENCE':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.payload.projectId
+            ? { ...p, items: (p.items || []).map(i => i.id === action.payload.itemId ? { ...i, referenceImage: action.payload.referenceImage } : i) }
+            : p
+        )
+      };
+    case 'SET_IMAGE_GEN_STATUS':
+      return {
+        ...state,
+        imageGenTasks: {
+          ...state.imageGenTasks,
+          [action.payload.shotId]: {
+            status: action.payload.status,
+            startTime: state.imageGenTasks[action.payload.shotId]?.startTime || Date.now(),
+            error: action.payload.error,
+          }
+        }
+      };
+    case 'CLEAR_IMAGE_GEN_STATUS':
+      const newTasks = { ...state.imageGenTasks };
+      delete newTasks[action.payload];
+      return { ...state, imageGenTasks: newTasks };
+    case 'SHOW_TOAST':
+      return { ...state, toast: action.payload };
+    case 'HIDE_TOAST':
+      return { ...state, toast: null };
+    case 'SET_LOADING':
+      return { ...state, isLoading: action.payload };
+    case 'SET_BATCH_CONCURRENCY':
+      return { ...state, batchConcurrency: action.payload };
+    default:
+      return state;
+  }
+}
+
+// Initial state
+const initialState: AppState = {
+  config: defaultConfig,
+  projects: [],
+  currentView: 'welcome',
+  currentProjectId: null,
+  currentProjectTab: 'storyboard',
+  selectedShotId: null,
+  toast: null,
+  isLoading: false,
+  batchConcurrency: 5,
+  imageGenTasks: {},
+};
+
+// Context
+interface AppContextType {
+  state: AppState;
+  dispatch: React.Dispatch<Action>;
+  showToast: (message: string, type: 'success' | 'error') => void;
+  saveConfig: () => void;
+  loadConfig: () => void;
+  resetConfig: () => void;
+  getCurrentProject: () => Project | null;
+  getSelectedShot: () => Shot | null;
+  // API调用方法
+  callChatAPI: (prompt: string, preset?: ModelPreset, referenceImages?: { url: string; label: string }[]) => Promise<string>;
+  callImageAPI: (prompt: string, preset?: ModelPreset, referenceImages?: { url: string; label: string }[]) => Promise<{imageUrl: string; imageBase64?: string}>;
+  callVideoAPI: (prompt: string, preset?: ModelPreset, imageUrl?: string, referenceImages?: { url: string; label: string }[]) => Promise<{taskId: string; status: string}>;
+  queryVideoStatus: (taskId: string, preset?: ModelPreset) => Promise<{status: string; videoUrl?: string}>;
+  // 图片生成任务状态
+  getImageGenStatus: (shotId: string) => AppState['imageGenTasks'][string] | undefined;
+  clearImageGenStatus: (shotId: string) => void;
+}
+
+const AppContext = createContext<AppContextType | undefined>(undefined);
+
+// Provider
+interface AppProviderProps {
+  children: ReactNode;
+}
+
+export function AppProvider({ children }: AppProviderProps) {
+  const [state, dispatch] = useReducer(appReducer, initialState);
+
+  // 加载配置
+  const loadConfig = () => {
+    try {
+      const savedConfig = localStorage.getItem(CONFIG_KEY);
+      if (savedConfig) {
+        const parsed = JSON.parse(savedConfig);
+        dispatch({ type: 'SET_CONFIG', payload: { ...defaultConfig, ...parsed } });
+      }
+      const savedProjects = localStorage.getItem(PROJECTS_KEY);
+      if (savedProjects) {
+        dispatch({ type: 'SET_PROJECTS', payload: JSON.parse(savedProjects) });
+      }
+      const savedConcurrency = localStorage.getItem('anime-studio-concurrency');
+      if (savedConcurrency) {
+        dispatch({ type: 'SET_BATCH_CONCURRENCY', payload: parseInt(savedConcurrency) });
+      }
+    } catch (e) {
+      console.error('Failed to load:', e);
+    }
+  };
+
+  // 保存配置
+  const saveConfig = () => {
+    try {
+      localStorage.setItem(CONFIG_KEY, JSON.stringify(state.config));
+      showToast('配置已保存', 'success');
+    } catch (e) {
+      showToast('保存失败', 'error');
+    }
+  };
+
+  // 保存项目
+  const saveProjects = () => {
+    try {
+      localStorage.setItem(PROJECTS_KEY, JSON.stringify(state.projects));
+    } catch (e) {
+      console.error('Failed to save projects:', e);
+    }
+  };
+
+  // 重置配置
+  const resetConfig = () => {
+    dispatch({ type: 'RESET_CONFIG' });
+    showToast('已重置', 'success');
+  };
+
+  // 显示Toast
+  const showToast = (message: string, type: 'success' | 'error') => {
+    dispatch({ type: 'SHOW_TOAST', payload: { message, type } });
+    setTimeout(() => {
+      dispatch({ type: 'HIDE_TOAST' });
+    }, 3000);
+  };
+
+  // 获取当前项目
+  const getCurrentProject = () => {
+    if (!state.currentProjectId) return null;
+    return state.projects.find(p => p.id === state.currentProjectId) || null;
+  };
+
+  // 获取选中的分镜
+  const getSelectedShot = () => {
+    const project = getCurrentProject();
+    if (!project || !state.selectedShotId) return null;
+    return project.shots.find(s => s.id === state.selectedShotId) || null;
+  };
+
+  // 获取API基础地址
+  const getBaseUrl = (preset?: ModelPreset) => {
+    const base = preset?.apiAddress || DEFAULT_API_BASE;
+    // 移除末尾的斜杠，避免URL中出现双斜杠
+    return base.replace(/\/$/, '');
+  };
+
+  // 获取API Key
+  const getApiKey = (preset?: ModelPreset) => {
+    return preset?.apiKey || '';
+  };
+
+  // 调用聊天API (改文/分镜/提示词，支持参考图)
+  const callChatAPI = async (
+    prompt: string,
+    preset?: ModelPreset,
+    referenceImages?: { url: string; label: string }[]
+  ): Promise<string> => {
+    const baseUrl = getBaseUrl(preset);
+    const apiKey = getApiKey(preset);
+    const modelName = preset?.modelName || 'gpt-4o';
+
+    if (!apiKey) {
+      throw new Error('请先在设置中配置API KEY');
+    }
+
+    // 构建消息内容
+    const content: any[] = [{ type: 'text', text: prompt }];
+
+    // 添加参考图片
+    if (referenceImages && referenceImages.length > 0) {
+      for (const ref of referenceImages) {
+        if (ref.url.startsWith('data:')) {
+          const matches = ref.url.match(/^data:([^;]+);base64,(.+)$/);
+          if (matches) {
+            content.push({
+              type: 'image_url',
+              image_url: {
+                url: ref.url,
+                detail: 'low'
+              }
+            });
+          }
+        } else if (ref.url.startsWith('http')) {
+          content.push({
+            type: 'image_url',
+            image_url: {
+              url: ref.url,
+              detail: 'low'
+            }
+          });
+        }
+      }
+    }
+
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: modelName,
+        messages: [{ role: 'user', content }],
+        temperature: 0.7,
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || `API调用失败: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  };
+
+  // 调用图片生成API (Gemini格式，支持参考图)
+  const callImageAPI = async (
+    prompt: string,
+    preset?: ModelPreset,
+    referenceImages?: { url: string; label: string }[]
+  ): Promise<{imageUrl: string; imageBase64?: string}> => {
+    const baseUrl = getBaseUrl(preset);
+    const apiKey = getApiKey(preset);
+    const modelName = preset?.modelName || 'gemini-2.0-flash-preview-image-generation';
+
+    if (!apiKey) {
+      throw new Error('请先在设置中配置API KEY');
+    }
+
+    // 构建请求体 parts
+    const parts: any[] = [{ text: prompt }];
+
+    // 如果有参考图，添加到 parts 中
+    if (referenceImages && referenceImages.length > 0) {
+      for (const ref of referenceImages) {
+        if (ref.url.startsWith('data:')) {
+          // 解析 base64 URL
+          const matches = ref.url.match(/^data:([^;]+);base64,(.+)$/);
+          if (matches) {
+            parts.push({ text: `[参考图片 - ${ref.label}]` });
+            parts.push({
+              inlineData: {
+                mimeType: matches[1],
+                data: matches[2]
+              }
+            });
+          }
+        }
+      }
+    }
+
+    const response = await fetch(`${baseUrl}/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+      })
+    });
+
+    // 先获取原始文本
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      throw new Error(`图片生成失败: ${response.status} - ${responseText.substring(0, 200)}`);
+    }
+
+    // 尝试解析JSON
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      console.error('JSON解析失败，返回内容:', responseText.substring(0, 500));
+      throw new Error(`返回数据格式错误: ${responseText.substring(0, 100)}`);
+    }
+
+    // 解析Gemini返回的图片
+    let imageUrl = '';
+    let imageBase64 = '';
+
+    if (data.candidates?.[0]?.content?.parts) {
+      for (const part of data.candidates[0].content.parts) {
+        if (part.inlineData) {
+          imageBase64 = part.inlineData.data;
+          imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+          break;
+        }
+      }
+    }
+
+    if (!imageUrl && !imageBase64) {
+      // 如果没有返回图片，检查是否有其他格式
+      if (data.image_url || data.url) {
+        imageUrl = data.image_url || data.url;
+      } else if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+        // 返回的是文本而不是图片
+        throw new Error(`API返回了文本而非图片: ${data.candidates[0].content.parts[0].text.substring(0, 100)}`);
+      } else {
+        console.log('Image response:', JSON.stringify(data).substring(0, 500));
+        throw new Error('未收到图片数据，请检查模型是否支持图片生成');
+      }
+    }
+
+    return { imageUrl, imageBase64 };
+  };
+
+  // 调用视频生成API
+  const callVideoAPI = async (
+    prompt: string,
+    preset?: ModelPreset,
+    imageUrl?: string,
+    referenceImages?: { url: string; label: string }[]
+  ): Promise<{taskId: string; status: string}> => {
+    const baseUrl = getBaseUrl(preset);
+    const apiKey = getApiKey(preset);
+    const modelName = preset?.modelName || 'veo3.1-fast';
+
+    if (!apiKey) {
+      throw new Error('请先在设置中配置API KEY');
+    }
+
+    // 构建请求体
+    const requestBody: any = {
+      model: modelName,
+      prompt: prompt,
+      enhance_prompt: true,
+    };
+
+    // 如果有图片URL，使用图片URL
+    if (imageUrl) {
+      requestBody.image_url = imageUrl;
+    } else if (referenceImages && referenceImages.length > 0) {
+      // 如果没有图片但有参考图，解析第一个参考图的base64
+      for (const ref of referenceImages) {
+        if (ref.url.startsWith('data:')) {
+          requestBody.image_url = ref.url;
+          break;
+        }
+      }
+    }
+
+    const response = await fetch(`${baseUrl}/v1/video/create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || `视频生成失败: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return { taskId: data.id, status: data.status };
+  };
+
+  // 获取图片生成任务状态
+  const getImageGenStatus = (shotId: string) => {
+    return state.imageGenTasks[shotId];
+  };
+
+  // 清除图片生成任务状态
+  const clearImageGenStatus = (shotId: string) => {
+    dispatch({ type: 'CLEAR_IMAGE_GEN_STATUS', payload: shotId });
+  };
+
+  // 查询视频状态
+  const queryVideoStatus = async (taskId: string, preset?: ModelPreset): Promise<{status: string; videoUrl?: string}> => {
+    const baseUrl = getBaseUrl(preset);
+    const apiKey = getApiKey(preset);
+
+    if (!apiKey) {
+      throw new Error('请先在设置中配置API KEY');
+    }
+
+    const response = await fetch(`${baseUrl}/v1/video/query?id=${encodeURIComponent(taskId)}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`查询视频状态失败: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return {
+      status: data.status,
+      videoUrl: data.video_url || data.detail?.video_url
+    };
+  };
+
+  // 项目变化时自动保存
+  useEffect(() => {
+    if (state.projects.length > 0) {
+      saveProjects();
+    }
+  }, [state.projects]);
+
+  // 保存并发数
+  useEffect(() => {
+    localStorage.setItem('anime-studio-concurrency', state.batchConcurrency.toString());
+  }, [state.batchConcurrency]);
+
+  // 初始化加载
+  useEffect(() => {
+    loadConfig();
+  }, []);
+
+  return (
+    <AppContext.Provider value={{
+      state, dispatch, showToast, saveConfig, loadConfig, resetConfig,
+      getCurrentProject, getSelectedShot, callChatAPI, callImageAPI, callVideoAPI, queryVideoStatus,
+      getImageGenStatus, clearImageGenStatus
+    }}>
+      {children}
+    </AppContext.Provider>
+  );
+}
+
+export function useApp() {
+  const context = useContext(AppContext);
+  if (!context) {
+    throw new Error('useApp must be used within AppProvider');
+  }
+  return context;
+}
