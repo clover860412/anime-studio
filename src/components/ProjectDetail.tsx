@@ -1372,29 +1372,89 @@ const handleSaveRewritten = () => {
             <div className="flex gap-2 flex-wrap">
               <button
                 onClick={async () => {
-                  // 一键配音：自动从分镜生成配音
+                  // 一键配音：自动从分镜生成配音，自动拆分「」对话
                   if (project.shots.length === 0) {
                     showToast('暂无分镜，请先生成或导入分镜', 'error');
                     return;
                   }
 
-                  // 生成配音列表
-                  const newVoices: Voice[] = project.shots.map((shot) => ({
-                    id: generateId(),
-                    shotId: shot.id,
-                    name: `分镜 ${shot.index} 配音`,
-                    script: shot.content,
-                    timbre: '旁白',
-                    status: 'idle' as const,
-                    createdAt: new Date().toISOString(),
-                  }));
+                  // 生成配音列表，自动拆分「」对话
+                  const newVoices: Voice[] = [];
+                  for (const shot of project.shots) {
+                    const script = shot.content;
+                    // 检查是否包含「」对话
+                    const hasDialogue = script.includes('「') && script.includes('」');
+
+                    if (hasDialogue) {
+                      // 拆分：旁白部分 + 对话部分
+                      // 使用正则拆分：非「」内容 为旁白，「」内内容 为对话
+                      const parts: { type: 'narration' | 'dialogue'; content: string }[] = [];
+                      let current = '';
+                      let inDialogue = false;
+                      let i = 0;
+
+                      while (i < script.length) {
+                        if (script[i] === '「') {
+                          if (current.trim()) {
+                            parts.push({ type: 'narration', content: current.trim() });
+                            current = '';
+                          }
+                          inDialogue = true;
+                          i++;
+                        } else if (script[i] === '」') {
+                          current += script[i];
+                          if (current.trim()) {
+                            parts.push({ type: 'dialogue', content: current.trim() });
+                            current = '';
+                          }
+                          inDialogue = false;
+                          i++;
+                        } else {
+                          current += script[i];
+                          i++;
+                        }
+                      }
+                      if (current.trim()) {
+                        parts.push({ type: inDialogue ? 'dialogue' : 'narration', content: current.trim() });
+                      }
+
+                      // 为每个部分创建配音
+                      let subIndex = 0;
+                      for (const part of parts) {
+                        if (!part.content) continue;
+                        newVoices.push({
+                          id: generateId(),
+                          shotId: shot.id,
+                          name: `分镜 ${shot.index}${part.type === 'dialogue' ? '-对话' + subIndex : ''}`,
+                          script: part.content.replace(/「|」/g, ''), // 移除引号
+                          emotion: '无',
+                          timbre: part.type === 'narration' ? '无' : '无', // 旁白用旁白音色，对话需要单独选择音色
+                          status: 'idle' as const,
+                          createdAt: new Date().toISOString(),
+                        });
+                        if (part.type === 'dialogue') subIndex++;
+                      }
+                    } else {
+                      // 没有对话，整体作为旁白
+                      newVoices.push({
+                        id: generateId(),
+                        shotId: shot.id,
+                        name: `分镜 ${shot.index} 旁白`,
+                        script: script,
+                        emotion: '无',
+                        timbre: '无',
+                        status: 'idle' as const,
+                        createdAt: new Date().toISOString(),
+                      });
+                    }
+                  }
 
                   const updatedProject = {
                     ...project,
                     voiceDubbings: [...(project.voiceDubbings || []), ...newVoices],
                   };
                   dispatch({ type: 'UPDATE_PROJECT', payload: updatedProject });
-                  showToast(`已生成 ${newVoices.length} 条配音，可手动编辑后生成`, 'success');
+                  showToast(`已生成 ${newVoices.length} 条配音，已自动拆分对话`, 'success');
                 }}
                 className="btn btn-secondary"
               >
@@ -1421,9 +1481,10 @@ const handleSaveRewritten = () => {
                     const emotionPrompt = `你是一个配音分析师。请分析以下配音文本，返回每段文本的说话人物和情绪。
 
 分析规则：
-- 如果文本中没有「」包裹的对话内容，判断为旁白
-- 如果文本中有「」包裹的对话内容，分析说话人物（如「小明说」中的小明）
-- 情绪从以下选择：旁白、喜悦、悲伤、愤怒、恐惧、惊讶、平静、激动
+- 判断文本是旁白还是角色对话
+- 如果是旁白（描述性文字、内心独白等），speaker 填"旁白"
+- 如果是角色对话（有具体人物说话），speaker 填人物名称
+- 情绪从以下选择：无、喜悦、悲伤、愤怒、恐惧、惊讶、平静、激动
 
 返回格式：JSON数组
 - speaker: 说话人物（旁白或具体人物名）
@@ -1433,7 +1494,7 @@ const handleSaveRewritten = () => {
 ${scriptList}
 
 请直接返回JSON数组，格式：
-[{"speaker":"旁白","emotion":"旁白"},{"speaker":"钟奚晨","emotion":"喜悦"},{"speaker":"旁白","emotion":"悲伤"}]`;
+[{"speaker":"旁白","emotion":"无"},{"speaker":"钟奚晨","emotion":"喜悦"},{"speaker":"旁白","emotion":"悲伤"}]`;
 
                     const result = await callChatAPI(emotionPrompt, preset);
                     // 尝试解析JSON
@@ -1450,8 +1511,9 @@ ${scriptList}
                     if (emotions && Array.isArray(emotions)) {
                       const updatedVoices = voices.map((v, i) => ({
                         ...v,
-                        emotion: emotions[i]?.emotion || '旁白',
-                        timbre: emotions[i]?.speaker === '旁白' ? '旁白' : (emotions[i]?.speaker || '旁白'),
+                        emotion: emotions[i]?.emotion || '无',
+                        // 如果是旁白音色填"无"，否则填说话人物名（后续可从音色列表匹配）
+                        timbre: emotions[i]?.speaker === '旁白' ? '无' : (emotions[i]?.speaker || '无'),
                       }));
                       dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: updatedVoices } });
                       showToast('情绪分析完成', 'success');
@@ -1560,7 +1622,7 @@ ${scriptList}
             <div className="space-y-3">
               {project.voiceDubbings.map((voice) => {
                 const shot = project.shots.find(s => s.id === voice.shotId);
-                const timbreOptions = project.voiceTimbres || [{ id: 'default', name: '旁白' }];
+                const timbreOptions = project.voiceTimbres || [{ id: 'default', name: '无' }];
                 return (
                   <div key={voice.id} className="panel">
                     <div className="flex items-start gap-3">
@@ -1610,7 +1672,7 @@ ${scriptList}
                         <div className="flex gap-2 flex-wrap">
                           <select
                             className="input-field text-xs py-1"
-                            value={voice.emotion || '旁白'}
+                            value={voice.emotion || '无'}
                             onChange={(e) => {
                               const updated = project.voiceDubbings.map(v =>
                                 v.id === voice.id ? { ...v, emotion: e.target.value } : v
@@ -1619,7 +1681,7 @@ ${scriptList}
                             }}
                           >
                             <option value="">选择情绪</option>
-                            <option value="旁白">旁白</option>
+                            <option value="无">无</option>
                             <option value="喜悦">喜悦</option>
                             <option value="悲伤">悲伤</option>
                             <option value="愤怒">愤怒</option>
@@ -1630,7 +1692,7 @@ ${scriptList}
                           </select>
                           <select
                             className="input-field text-xs py-1"
-                            value={voice.timbre || '旁白'}
+                            value={voice.timbre || '无'}
                             onChange={(e) => {
                               const updated = project.voiceDubbings.map(v =>
                                 v.id === voice.id ? { ...v, timbre: e.target.value } : v
@@ -1639,7 +1701,7 @@ ${scriptList}
                             }}
                           >
                             <option value="">选择音色</option>
-                            <option value="旁白">旁白（默认）</option>
+                            <option value="无">无（默认）</option>
                             {timbreOptions.map(t => (
                               <option key={t.id} value={t.name}>{t.name}</option>
                             ))}
@@ -1676,8 +1738,8 @@ ${scriptList}
                               // 构建请求参数（发送给 ComfyUI）
                               const payload: any = {
                                 script: voice.script,
-                                emotion: voice.emotion || '旁白',
-                                timbre: voice.timbre || '旁白',
+                                emotion: voice.emotion || '无',
+                                timbre: voice.timbre || '无',
                               };
                               if (referenceAudio) {
                                 payload.referenceAudio = referenceAudio;
