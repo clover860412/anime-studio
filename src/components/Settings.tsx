@@ -91,6 +91,16 @@ export default function Settings() {
                   />
                 </div>
                 <div>
+                  <label className="label">📁 ComfyUI 安装路径</label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    placeholder="如 D:\\ComfyUI-aki-v3\\ComfyUI"
+                    value={state.config.basic.comfyuiPath}
+                    onChange={(e) => handleBasicChange('comfyuiPath', e.target.value)}
+                  />
+                </div>
+                <div>
                   <label className="label">🖼️ ComfyUI 生图地址</label>
                   <input
                     type="text"

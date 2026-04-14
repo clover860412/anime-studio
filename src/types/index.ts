@@ -8,6 +8,7 @@ export interface AppConfig {
     projectDir: string;      // 项目目录（创建项目时自动在此目录下创建）
     capcutDir: string;      // 导出剪映目录
     comfyuiVoiceUrl: string;  // ComfyUI 配音地址
+    comfyuiPath: string;  // ComfyUI 本地安装路径（如 D:\\ComfyUI-aki-v3\\ComfyUI）
     comfyuiVideoUrl: string;  // ComfyUI 视频地址
     // ComfyUI 生图地址
     comfyuiImageUrl: string;
@@ -150,6 +151,7 @@ export const defaultConfig: AppConfig = {
     projectDir: '',
     capcutDir: '',
     comfyuiVoiceUrl: '',
+    comfyuiPath: 'D:\\ComfyUI-aki-v3\\ComfyUI',
     comfyuiVideoUrl: '',
     comfyuiImageUrl: '',
     // 分析模型
