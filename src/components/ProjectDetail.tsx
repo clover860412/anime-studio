@@ -1569,7 +1569,7 @@ ${scriptList}
                   }
 
                   showToast('配音生成完成', 'success');
-                }
+                }}
                 className="btn btn-primary"
                 disabled={!state.config.basic.comfyuiVoiceUrl}
               >

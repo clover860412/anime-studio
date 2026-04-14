@@ -420,6 +420,8 @@ interface AppContextType {
   // 图片生成任务状态
   getImageGenStatus: (shotId: string) => AppState['imageGenTasks'][string] | undefined;
   clearImageGenStatus: (shotId: string) => void;
+  // ComfyUI TTS配音
+  callComfyUITTS: (structuredText: string, narratorAudio?: string, characterAudio?: string, emotion?: string) => Promise<{audioUrl: string; duration: number}>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -1006,14 +1008,14 @@ export function AppProvider({ children }: AppProviderProps) {
       "3": {  // LoadAudio for narrator
         "inputs": {
           "audio": narratorAudio || "",
-          "audioUI": narratorAudio ? `/api/view?filename=${encodeURIComponent(narratorAudio)}&type=input&subfolder=&rand=${Math.random()}` : ""
+          "audioUI": narratorAudio ? `/api/view?filename=${encodeURIComponent(narratorAudio || '')}&type=input&subfolder=&rand=${Math.random()}` : ""
         },
         "class_type": "LoadAudio"
       },
       "4": {  // LoadAudio for character
         "inputs": {
           "audio": characterAudio || narratorAudio || "",
-          "audioUI": (characterAudio || narratorAudio) ? `/api/view?filename=${encodeURIComponent(characterAudio || narratorAudio)}&type=input&subfolder=&rand=${Math.random()}` : ""
+          "audioUI": (characterAudio || narratorAudio) ? `/api/view?filename=${encodeURIComponent((characterAudio || narratorAudio) || '')}&type=input&subfolder=&rand=${Math.random()}` : ""
         },
         "class_type": "LoadAudio"
       },
