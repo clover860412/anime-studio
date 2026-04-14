@@ -1011,7 +1011,7 @@ export function AppProvider({ children }: AppProviderProps) {
     };
 
     const promptId = `tts_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const promptData = [2, promptId, workflow];
+    const promptData = [1, promptId, workflow];
 
     console.log('[TTS] 通过Tauri命令调用ComfyUI...');
     
