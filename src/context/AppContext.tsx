@@ -1051,6 +1051,15 @@ export function AppProvider({ children }: AppProviderProps) {
     });
 
     console.log('[TTS] 响应状态:', response.status);
+    console.log('[TTS] 响应头:', response.headers.get('content-type'));
+
+    // 检查返回的是否为HTML（可能是404或错误页面）
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      const text = await response.text();
+      console.error('[TTS] 非JSON响应:', text.substring(0, 200));
+      throw new Error(`ComfyUI返回了非JSON格式: ${response.status}。请检查ComfyUI是否在运行，或地址是否正确。`);
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
