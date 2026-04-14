@@ -9,6 +9,24 @@ export interface AppConfig {
     capcutDir: string;      // 导出剪映目录
     comfyuiVoiceUrl: string;  // ComfyUI 配音地址
     comfyuiVideoUrl: string;  // ComfyUI 视频地址
+    // ComfyUI 生图地址
+    comfyuiImageUrl: string;
+    // 分析模型配置（用于：全剧概要、人物、场景、物品、改文、提示词分析等）
+    analyzeApiUrl: string;
+    analyzeApiKey: string;
+    analyzeModelName: string;
+    // 付费配音配置
+    voiceApiUrl: string;
+    voiceApiKey: string;
+    voiceModelName: string;
+    // 付费生图配置
+    imageApiUrl: string;
+    imageApiKey: string;
+    imageModelName: string;
+    // 付费视频配置
+    videoApiUrl: string;
+    videoApiKey: string;
+    videoModelName: string;
   };
   prompts: {
     storyboardPrompt: string; // 分镜咒语
@@ -119,7 +137,7 @@ export interface Project {
 
 // Tab类型
 export type SettingsTab = 'basic' | 'presets' | 'prompts';
-export type ProjectTab = 'overview' | 'rewritten' | 'voice' | 'storyboard' | 'images' | 'videos';
+export type ProjectTab = 'overview' | 'rewritten' | 'voice' | 'storyboard' | 'images' | 'videos' | 'export';
 export type ViewType = 'welcome' | 'settings' | 'projectList' | 'projectDetail' | 'newProject';
 
 // 默认配置
@@ -133,6 +151,23 @@ export const defaultConfig: AppConfig = {
     capcutDir: '',
     comfyuiVoiceUrl: '',
     comfyuiVideoUrl: '',
+    comfyuiImageUrl: '',
+    // 分析模型
+    analyzeApiUrl: '',
+    analyzeApiKey: '',
+    analyzeModelName: '',
+    // 付费配音
+    voiceApiUrl: '',
+    voiceApiKey: '',
+    voiceModelName: '',
+    // 付费生图
+    imageApiUrl: '',
+    imageApiKey: '',
+    imageModelName: '',
+    // 付费视频
+    videoApiUrl: '',
+    videoApiKey: '',
+    videoModelName: '',
   },
   prompts: {
     storyboardPrompt: '你是一个专业的分镜师。请将下面的故事内容拆分成若干分镜，每个分镜用一段简洁的文字描述画面和动作。用JSON数组格式返回，每个分镜包含content字段。',

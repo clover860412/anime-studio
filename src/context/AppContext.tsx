@@ -405,7 +405,14 @@ interface AppContextType {
   resetConfig: () => void;
   getCurrentProject: () => Project | null;
   getSelectedShot: () => Shot | null;
-  // API调用方法
+  // 分析模型API（用于：全剧概要、人物、场景、物品、改文、提示词分析等）
+  callAnalyzeAPI: (prompt: string) => Promise<string>;
+  // 付费生图API
+  callPaidImageAPI: (prompt: string, referenceImages?: { url: string; label: string }[]) => Promise<{imageUrl: string; imageBase64?: string}>;
+  // 付费视频API
+  callPaidVideoAPI: (prompt: string, imageUrl?: string) => Promise<{taskId: string; status: string}>;
+  queryPaidVideoStatus: (taskId: string) => Promise<{status: string; videoUrl?: string}>;
+  // 旧API（兼容现有代码）
   callChatAPI: (prompt: string, preset?: ModelPreset, referenceImages?: { url: string; label: string }[]) => Promise<string>;
   callImageAPI: (prompt: string, preset?: ModelPreset, referenceImages?: { url: string; label: string }[]) => Promise<{imageUrl: string; imageBase64?: string}>;
   callVideoAPI: (prompt: string, preset?: ModelPreset, imageUrl?: string, referenceImages?: { url: string; label: string }[]) => Promise<{taskId: string; status: string}>;
@@ -569,6 +576,39 @@ export function AppProvider({ children }: AppProviderProps) {
     return data.choices?.[0]?.message?.content || '';
   };
 
+  // 分析模型API（用于：全剧概要、人物、场景、物品、改文、提示词分析等）
+  const callAnalyzeAPI = async (prompt: string): Promise<string> => {
+    const { analyzeApiUrl, analyzeApiKey, analyzeModelName } = state.config.basic;
+
+    if (!analyzeApiKey) {
+      throw new Error('请先在设置中配置分析模型API');
+    }
+
+    const baseUrl = analyzeApiUrl.replace(/\/$/, '') || 'https://api.openai.com/v1';
+    const modelName = analyzeModelName || 'gpt-4o';
+
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${analyzeApiKey}`
+      },
+      body: JSON.stringify({
+        model: modelName,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || `分析模型API调用失败: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  };
+
   // 调用图片生成API (Gemini格式，支持参考图)
   const callImageAPI = async (
     prompt: string,
@@ -662,6 +702,113 @@ export function AppProvider({ children }: AppProviderProps) {
     return { imageUrl, imageBase64 };
   };
 
+  // 付费生图API
+  const callPaidImageAPI = async (
+    prompt: string,
+    referenceImages?: { url: string; label: string }[]
+  ): Promise<{imageUrl: string; imageBase64?: string}> => {
+    const { imageApiUrl, imageApiKey, imageModelName } = state.config.basic;
+
+    if (!imageApiKey) {
+      throw new Error('请先在设置中配置付费生图API');
+    }
+
+    const baseUrl = imageApiUrl.replace(/\/$/, '') || 'https://api.openai.com/v1';
+    const modelName = imageModelName || 'dall-e-3';
+
+    // 构建消息内容
+    const content: any[] = [{ type: 'text', text: prompt }];
+
+    // 添加参考图片
+    if (referenceImages && referenceImages.length > 0) {
+      for (const ref of referenceImages) {
+        if (ref.url.startsWith('data:')) {
+          const matches = ref.url.match(/^data:([^;]+);base64,(.+)$/);
+          if (matches) {
+            content.push({
+              type: 'image_url',
+              image_url: {
+                url: ref.url,
+                detail: 'low'
+              }
+            });
+          }
+        } else if (ref.url.startsWith('http')) {
+          content.push({
+            type: 'image_url',
+            image_url: {
+              url: ref.url,
+              detail: 'low'
+            }
+          });
+        }
+      }
+    }
+
+    // 根据不同的API调整调用方式
+    if (modelName.includes('gemini')) {
+      // Gemini格式
+      const parts: any[] = [{ text: prompt }];
+      if (referenceImages && referenceImages.length > 0) {
+        for (const ref of referenceImages) {
+          if (ref.url.startsWith('data:')) {
+            const matches = ref.url.match(/^data:([^;]+);base64,(.+)$/);
+            if (matches) {
+              parts.push({
+                inlineData: {
+                  mimeType: matches[1],
+                  data: matches[2]
+                }
+              });
+            }
+          }
+        }
+      }
+      const response = await fetch(`${baseUrl}/v1beta/models/${modelName}:generateContent?key=${imageApiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts }],
+          generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+        })
+      });
+      const responseText = await response.text();
+      if (!response.ok) throw new Error(`图片生成失败: ${response.status}`);
+      const data = JSON.parse(responseText);
+      let imageUrl = '';
+      let imageBase64 = '';
+      if (data.candidates?.[0]?.content?.parts) {
+        for (const part of data.candidates[0].content.parts) {
+          if (part.inlineData) {
+            imageBase64 = part.inlineData.data;
+            imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+            break;
+          }
+        }
+      }
+      return { imageUrl, imageBase64 };
+    } else {
+      // OpenAI格式
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${imageApiKey}`
+        },
+        body: JSON.stringify({
+          model: modelName,
+          messages: [{ role: 'user', content }],
+        })
+      });
+      if (!response.ok) throw new Error(`图片生成失败: ${response.status}`);
+      const data = await response.json();
+      // 假设返回格式包含 image_url 或 base64
+      const imageUrl = data.data?.[0]?.url || data.image_url || '';
+      const imageBase64 = data.data?.[0]?.base64 || '';
+      return { imageUrl, imageBase64 };
+    }
+  };
+
   // 调用视频生成API
   const callVideoAPI = async (
     prompt: string,
@@ -715,6 +862,48 @@ export function AppProvider({ children }: AppProviderProps) {
     return { taskId: data.id, status: data.status };
   };
 
+  // 付费视频API
+  const callPaidVideoAPI = async (
+    prompt: string,
+    imageUrl?: string
+  ): Promise<{taskId: string; status: string}> => {
+    const { videoApiUrl, videoApiKey, videoModelName } = state.config.basic;
+
+    if (!videoApiKey) {
+      throw new Error('请先在设置中配置付费视频API');
+    }
+
+    const baseUrl = videoApiUrl.replace(/\/$/, '');
+    const modelName = videoModelName || 'veo3.1-fast';
+
+    const requestBody: any = {
+      model: modelName,
+      prompt: prompt,
+      enhance_prompt: true,
+    };
+
+    if (imageUrl) {
+      requestBody.image_url = imageUrl;
+    }
+
+    const response = await fetch(`${baseUrl}/v1/video/create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${videoApiKey}`
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || `视频生成失败: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return { taskId: data.id, status: data.status };
+  };
+
   // 获取图片生成任务状态
   const getImageGenStatus = (shotId: string) => {
     return state.imageGenTasks[shotId];
@@ -752,6 +941,34 @@ export function AppProvider({ children }: AppProviderProps) {
     };
   };
 
+  // 查询付费视频状态
+  const queryPaidVideoStatus = async (taskId: string): Promise<{status: string; videoUrl?: string}> => {
+    const { videoApiUrl, videoApiKey } = state.config.basic;
+
+    if (!videoApiKey) {
+      throw new Error('请先在设置中配置付费视频API');
+    }
+
+    const baseUrl = videoApiUrl.replace(/\/$/, '');
+
+    const response = await fetch(`${baseUrl}/v1/video/query?id=${encodeURIComponent(taskId)}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${videoApiKey}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`查询视频状态失败: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return {
+      status: data.status,
+      videoUrl: data.video_url || data.detail?.video_url
+    };
+  };
+
   // 项目变化时自动保存
   useEffect(() => {
     if (state.projects.length > 0) {
@@ -772,7 +989,8 @@ export function AppProvider({ children }: AppProviderProps) {
   return (
     <AppContext.Provider value={{
       state, dispatch, showToast, saveConfig, loadConfig, resetConfig,
-      getCurrentProject, getSelectedShot, callChatAPI, callImageAPI, callVideoAPI, queryVideoStatus,
+      getCurrentProject, getSelectedShot, callChatAPI, callAnalyzeAPI, callImageAPI, callPaidImageAPI,
+      callVideoAPI, callPaidVideoAPI, queryVideoStatus, queryPaidVideoStatus,
       getImageGenStatus, clearImageGenStatus
     }}>
       {children}

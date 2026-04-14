@@ -17,16 +17,20 @@ function formatSrtTime(seconds: number): string {
 export default function ProjectDetail() {
   const {
     state, dispatch, getCurrentProject, getSelectedShot,
-    showToast, callChatAPI, callImageAPI, callVideoAPI, queryVideoStatus,
+    showToast, callChatAPI, callAnalyzeAPI, callPaidImageAPI,
+    callPaidVideoAPI, queryPaidVideoStatus,
     getImageGenStatus, clearImageGenStatus
   } = useApp();
 
   const project = getCurrentProject();
   const selectedShot = getSelectedShot();
-  const [selectedPresetId, setSelectedPresetId] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [rewrittenText, setRewrittenText] = useState('');
   const [imageGenMessage, setImageGenMessage] = useState<string>('');
+  // 配音/生图/视频来源
+  const [voiceSource, setVoiceSource] = useState<'comfyui' | 'paid'>('comfyui');
+  const [imageSource, setImageSource] = useState<'comfyui' | 'paid'>('paid');
+  const [videoSource, setVideoSource] = useState<'comfyui' | 'paid'>('paid');
   const timeoutRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   // 组件卸载时清理所有定时器
@@ -63,42 +67,11 @@ export default function ProjectDetail() {
     return <div className="p-6">项目不存在</div>;
   }
 
-  const selectedPreset = state.config.modelPresets.find(p => p.id === selectedPresetId);
-
-  const handleTabChange = (tab: 'overview' | 'rewritten' | 'voice' | 'storyboard' | 'images' | 'videos') => {
+  const handleTabChange = (tab: 'overview' | 'rewritten' | 'voice' | 'storyboard' | 'images' | 'videos' | 'export') => {
     dispatch({ type: 'SET_PROJECT_TAB', payload: tab });
     if (tab === 'rewritten') {
       setRewrittenText(project.rewrittenText || project.originalText);
     }
-  };
-
-  const handleExportXlsx = () => {
-    // 简单实现：通过构造CSV格式然后下载
-    const headers = ['镜号', '文案', '图片提示词', '视频提示词', '人物', '场景'];
-    const rows = project.shots.map(shot => [
-      shot.index,
-      shot.content,
-      shot.imagePrompt,
-      shot.videoPrompt,
-      (project.characters || []).filter(c => (shot.characterIds || []).includes(c.id)).map(c => c.name).join(', '),
-      (project.scenes || []).filter(s => (shot.sceneIds || []).includes(s.id)).map(s => s.name).join(', '),
-    ]);
-    
-    const csvContent = [headers, ...rows]
-      .map(row => row.map(cell => `"${(cell || '').toString().replace(/"/g, '""')}"`).join(','))
-      .join('\n');
-    
-    const BOM = '\uFEFF';
-    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${project.name}_分镜表.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    showToast('导出成功', 'success');
   };
 
   const handleSelectShot = (shotId: string) => {
@@ -127,9 +100,8 @@ export default function ProjectDetail() {
       showToast('请先输入原文', 'error');
       return;
     }
-    const preset = selectedPreset || state.config.modelPresets.find(p => p.apiKey);
-    if (!preset) {
-      showToast('请先配置API KEY', 'error');
+    if (!state.config.basic.analyzeApiKey) {
+      showToast('请先在设置中配置分析模型API', 'error');
       return;
     }
     setIsProcessing(true);
@@ -153,7 +125,7 @@ export default function ProjectDetail() {
       for (let i = 0; i < batches.length; i++) {
         const batchPrompt = `${state.config.prompts.textPrompt}\n\n请改写以下内容：\n\n${batches[i]}`;
         try {
-          const result = await callChatAPI(batchPrompt, preset);
+          const result = await callAnalyzeAPI(batchPrompt);
           rewrittenParagraphs.push(result.trim());
         } catch {
           rewrittenParagraphs.push(batches[i]);
@@ -366,14 +338,12 @@ const handleSaveRewritten = () => {
       showToast('当前分镜内容为空', 'error');
       return;
     }
+    if (!state.config.basic.analyzeApiKey) {
+      showToast('请先在设置中配置分析模型API', 'error');
+      return;
+    }
     setIsProcessing(true);
     try {
-      const preset = selectedPreset || state.config.modelPresets.find(p => p.apiKey);
-      if (!preset) {
-        showToast('请先配置API KEY', 'error');
-        return;
-      }
-
       // 构建人物场景物品信息（文字描述）
       let charSceneInfo = '';
       for (const charId of (shot.characterIds || [])) {
@@ -395,27 +365,9 @@ const handleSaveRewritten = () => {
         }
       }
 
-      // 构建参考图列表（发送给大模型看图）
-      const referenceImages: { url: string; label: string }[] = [];
-      for (const charId of (shot.characterIds || [])) {
-        const charInfo = (project.characters || []).find(c => c.id === charId);
-        if (charInfo?.referenceImage) referenceImages.push({ url: charInfo.referenceImage, label: `人物：${charInfo.name}` });
-        if (charInfo?.imageFile) referenceImages.push({ url: charInfo.imageFile, label: `人物：${charInfo.name}` });
-      }
-      for (const sceneId of (shot.sceneIds || [])) {
-        const sceneInfo = (project.scenes || []).find(s => s.id === sceneId);
-        if (sceneInfo?.referenceImage) referenceImages.push({ url: sceneInfo.referenceImage, label: `场景：${sceneInfo.name}` });
-        if (sceneInfo?.imageFile) referenceImages.push({ url: sceneInfo.imageFile, label: `场景：${sceneInfo.name}` });
-      }
-      for (const itemId of (shot.itemIds || [])) {
-        const itemInfo = (project.items || []).find(i => i.id === itemId);
-        if (itemInfo?.referenceImage) referenceImages.push({ url: itemInfo.referenceImage, label: `物品：${itemInfo.name}` });
-        if (itemInfo?.imageFile) referenceImages.push({ url: itemInfo.imageFile, label: `物品：${itemInfo.name}` });
-      }
-
       const contextPrompt = buildContextPrompt(shot.content, shot.index - 1);
       const fullPrompt = `${state.config.prompts.imagePrompt}\n\n# 分镜内容\n${contextPrompt}${charSceneInfo}\n\n请根据以上信息，生成适合的图片描述。`;
-      const result = await callChatAPI(fullPrompt, preset, referenceImages);
+      const result = await callAnalyzeAPI(fullPrompt);
       const updatedShot = { ...shot, imagePrompt: result.trim() };
       dispatch({ type: 'UPDATE_SHOT', payload: { projectId: project.id, shot: updatedShot } });
       showToast(`分镜 #${shot.index} 图片提示词已生成`, 'success');
@@ -431,14 +383,12 @@ const handleSaveRewritten = () => {
       showToast('当前分镜内容为空', 'error');
       return;
     }
+    if (!state.config.basic.analyzeApiKey) {
+      showToast('请先在设置中配置分析模型API', 'error');
+      return;
+    }
     setIsProcessing(true);
     try {
-      const preset = selectedPreset || state.config.modelPresets.find(p => p.apiKey);
-      if (!preset) {
-        showToast('请先配置API KEY', 'error');
-        return;
-      }
-
       // 构建人物场景物品信息（文字描述）
       let charSceneItemInfo = '';
       for (const charId of (shot.characterIds || [])) {
@@ -460,27 +410,9 @@ const handleSaveRewritten = () => {
         }
       }
 
-      // 构建参考图列表（发送给大模型看图）
-      const referenceImages: { url: string; label: string }[] = [];
-      for (const charId of (shot.characterIds || [])) {
-        const charInfo = (project.characters || []).find(c => c.id === charId);
-        if (charInfo?.referenceImage) referenceImages.push({ url: charInfo.referenceImage, label: `人物：${charInfo.name}` });
-        if (charInfo?.imageFile) referenceImages.push({ url: charInfo.imageFile, label: `人物：${charInfo.name}` });
-      }
-      for (const sceneId of (shot.sceneIds || [])) {
-        const sceneInfo = (project.scenes || []).find(s => s.id === sceneId);
-        if (sceneInfo?.referenceImage) referenceImages.push({ url: sceneInfo.referenceImage, label: `场景：${sceneInfo.name}` });
-        if (sceneInfo?.imageFile) referenceImages.push({ url: sceneInfo.imageFile, label: `场景：${sceneInfo.name}` });
-      }
-      for (const itemId of (shot.itemIds || [])) {
-        const itemInfo = (project.items || []).find(i => i.id === itemId);
-        if (itemInfo?.referenceImage) referenceImages.push({ url: itemInfo.referenceImage, label: `物品：${itemInfo.name}` });
-        if (itemInfo?.imageFile) referenceImages.push({ url: itemInfo.imageFile, label: `物品：${itemInfo.name}` });
-      }
-
       const contextPrompt = buildContextPrompt(shot.content, shot.index - 1);
       const fullPrompt = `${state.config.prompts.animePrompt}\n\n# 分镜内容\n${contextPrompt}${charSceneItemInfo}\n\n请根据以上信息，生成适合AI视频生成的描述。`;
-      const result = await callChatAPI(fullPrompt, preset, referenceImages);
+      const result = await callAnalyzeAPI(fullPrompt);
       const updatedShot = { ...shot, videoPrompt: result.trim() };
       dispatch({ type: 'UPDATE_SHOT', payload: { projectId: project.id, shot: updatedShot } });
       showToast(`分镜 #${shot.index} 视频提示词已生成`, 'success');
@@ -496,20 +428,19 @@ const handleSaveRewritten = () => {
       showToast('暂无分镜', 'error');
       return;
     }
+    if (!state.config.basic.analyzeApiKey) {
+      showToast('请先在设置中配置分析模型API', 'error');
+      return;
+    }
     setIsProcessing(true);
     let successCount = 0;
     try {
-      const preset = selectedPreset || state.config.modelPresets.find(p => p.apiKey);
-      if (!preset) {
-        showToast('请先配置API KEY', 'error');
-        return;
-      }
       for (const shot of project.shots) {
         if (!shot.content) continue;
         try {
           const contextPrompt = buildContextPrompt(shot.content, shot.index - 1);
           const fullPrompt = `${state.config.prompts.imagePrompt}\n\n${contextPrompt}`;
-          const result = await callChatAPI(fullPrompt, preset);
+          const result = await callAnalyzeAPI(fullPrompt);
           const updatedShot = { ...shot, imagePrompt: result.trim() };
           dispatch({ type: 'UPDATE_SHOT', payload: { projectId: project.id, shot: updatedShot } });
           successCount++;
@@ -529,20 +460,19 @@ const handleSaveRewritten = () => {
       showToast('暂无分镜', 'error');
       return;
     }
+    if (!state.config.basic.analyzeApiKey) {
+      showToast('请先在设置中配置分析模型API', 'error');
+      return;
+    }
     setIsProcessing(true);
     let successCount = 0;
     try {
-      const preset = selectedPreset || state.config.modelPresets.find(p => p.apiKey);
-      if (!preset) {
-        showToast('请先配置API KEY', 'error');
-        return;
-      }
       for (const shot of project.shots) {
         if (!shot.content) continue;
         try {
           const contextPrompt = buildContextPrompt(shot.content, shot.index - 1);
           const fullPrompt = `${state.config.prompts.animePrompt}\n\n${contextPrompt}`;
-          const result = await callChatAPI(fullPrompt, preset);
+          const result = await callAnalyzeAPI(fullPrompt);
           const updatedShot = { ...shot, videoPrompt: result.trim() };
           dispatch({ type: 'UPDATE_SHOT', payload: { projectId: project.id, shot: updatedShot } });
           successCount++;
@@ -594,10 +524,9 @@ const handleSaveRewritten = () => {
     timeoutRef.current[selectedShot.id] = timeout;
 
     try {
-      const preset = selectedPreset || state.config.modelPresets.find(p => p.apiKey && p.modelName.includes('gemini'));
-      if (!preset) {
-        showToast('请选择Gemini模型的预设', 'error');
-        dispatch({ type: 'SET_IMAGE_GEN_STATUS', payload: { shotId: selectedShot.id, status: 'failed', error: '未选择模型预设' } });
+      if (imageSource === 'paid' && !state.config.basic.imageApiKey) {
+        showToast('请先在设置中配置付费生图API', 'error');
+        dispatch({ type: 'SET_IMAGE_GEN_STATUS', payload: { shotId: selectedShot.id, status: 'failed', error: '未配置API' } });
         setImageGenMessage('');
         clearTimeout(timeoutRef.current[selectedShot.id]);
         setIsProcessing(false);
@@ -625,7 +554,14 @@ const handleSaveRewritten = () => {
         if (itemInfo?.imageFile) referenceImages.push({ url: itemInfo.imageFile, label: `物品：${itemInfo.name}` });
       }
 
-      const result = await callImageAPI(selectedShot.imagePrompt, preset, referenceImages);
+      let result;
+      if (imageSource === 'paid') {
+        result = await callPaidImageAPI(selectedShot.imagePrompt, referenceImages);
+      } else {
+        result = { imageUrl: '' }; // ComfyUI暂未实现
+        showToast('ComfyUI生图功能待实现', 'error');
+        return;
+      }
 
       // 清理超时定时器
       if (timeoutRef.current[selectedShot.id]) {
@@ -693,9 +629,8 @@ const handleSaveRewritten = () => {
     }
     setIsProcessing(true);
     try {
-      const preset = selectedPreset || state.config.modelPresets.find(p => p.apiKey && (p.modelName.includes('veo') || p.modelName.includes('grok')));
-      if (!preset) {
-        showToast('请选择视频模型的预设', 'error');
+      if (videoSource === 'paid' && !state.config.basic.videoApiKey) {
+        showToast('请先在设置中配置付费视频API', 'error');
         return;
       }
 
@@ -723,7 +658,13 @@ const handleSaveRewritten = () => {
       // 如果有生成的图片，用图片；否则用参考图
       const imageUrl = selectedShot.imageFile?.startsWith('data:') ? selectedShot.imageFile : undefined;
 
-      const result = await callVideoAPI(selectedShot.videoPrompt, preset, imageUrl, referenceImages);
+      let result;
+      if (videoSource === 'paid') {
+        result = await callPaidVideoAPI(selectedShot.videoPrompt, imageUrl);
+      } else {
+        showToast('ComfyUI视频功能待实现', 'error');
+        return;
+      }
       const fileName = `shot_${selectedShot.index}_${Date.now()}.mp4`;
       dispatch({
         type: 'UPDATE_SHOT_VIDEO',
@@ -783,9 +724,8 @@ const handleSaveRewritten = () => {
       showToast('没有可生图的分镜', 'error');
       return;
     }
-    const preset = selectedPreset || state.config.modelPresets.find(p => p.apiKey && p.modelName.includes('gemini'));
-    if (!preset) {
-      showToast('请选择Gemini模型的预设', 'error');
+    if (imageSource === 'paid' && !state.config.basic.imageApiKey) {
+      showToast('请先在设置中配置付费生图API', 'error');
       return;
     }
     setIsProcessing(true);
@@ -813,7 +753,12 @@ const handleSaveRewritten = () => {
               if (itemInfo?.referenceImage) referenceImages.push({ url: itemInfo.referenceImage, label: `物品：${itemInfo.name}` });
               if (itemInfo?.imageFile) referenceImages.push({ url: itemInfo.imageFile, label: `物品：${itemInfo.name}` });
             }
-            const result = await callImageAPI(shot.imagePrompt, preset, referenceImages);
+            let result;
+            if (imageSource === 'paid') {
+              result = await callPaidImageAPI(shot.imagePrompt, referenceImages);
+            } else {
+              return; // ComfyUI暂未实现
+            }
             if (result.imageUrl) {
               dispatch({
                 type: 'UPDATE_SHOT_IMAGE',
@@ -835,9 +780,8 @@ const handleSaveRewritten = () => {
       showToast('没有可生成视频的分镜', 'error');
       return;
     }
-    const preset = selectedPreset || state.config.modelPresets.find(p => p.apiKey && (p.modelName.includes('veo') || p.modelName.includes('grok')));
-    if (!preset) {
-      showToast('请选择视频模型的预设', 'error');
+    if (videoSource === 'paid' && !state.config.basic.videoApiKey) {
+      showToast('请先在设置中配置付费视频API', 'error');
       return;
     }
     setIsProcessing(true);
@@ -848,7 +792,12 @@ const handleSaveRewritten = () => {
       await Promise.all(
         batch.map(async (shot) => {
           try {
-            const result = await callVideoAPI(shot.videoPrompt, preset);
+            let result;
+            if (videoSource === 'paid') {
+              result = await callPaidVideoAPI(shot.videoPrompt);
+            } else {
+              return; // ComfyUI暂未实现
+            }
             const fileName = `shot_${shot.index}_${Date.now()}.mp4`;
             dispatch({
               type: 'UPDATE_SHOT_VIDEO',
@@ -869,16 +818,20 @@ const handleSaveRewritten = () => {
       showToast('没有待查询的视频任务', 'error');
       return;
     }
-    const preset = selectedPreset || state.config.modelPresets.find(p => p.apiKey);
-    if (!preset) {
-      showToast('请先配置API KEY', 'error');
+    if (videoSource === 'paid' && !state.config.basic.videoApiKey) {
+      showToast('请先在设置中配置付费视频API', 'error');
       return;
     }
     setIsProcessing(true);
     let updatedCount = 0;
     for (const shot of shotsWithTasks) {
       try {
-        const result = await queryVideoStatus(shot.videoTaskId!, preset);
+        let result;
+        if (videoSource === 'paid') {
+          result = await queryPaidVideoStatus(shot.videoTaskId!);
+        } else {
+          continue; // ComfyUI暂未实现
+        }
         if (result.status === 'completed' && result.videoUrl) {
           dispatch({
             type: 'UPDATE_SHOT_VIDEO',
@@ -909,9 +862,46 @@ const handleSaveRewritten = () => {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="h-[50px] bg-[#1a1a1a] border-b border-[#3a3a3a] flex items-center px-4 gap-4">
+      <div className="min-h-[50px] bg-[#1a1a1a] border-b border-[#3a3a3a] flex items-center px-4 gap-4 flex-wrap">
         <button onClick={handleBack} className="text-[#a0a0a0] hover:text-white">← 返回</button>
         <span className="text-white font-medium">{project.name}</span>
+
+        {/* 分析模型显示 */}
+        <div className="flex items-center gap-1 text-sm">
+          <span className="text-[#666]">🔍</span>
+          <span className="text-[#10b981]">{state.config.basic.analyzeModelName || '未配置'}</span>
+        </div>
+
+        {/* 配音来源 */}
+        <select
+          className="input-field w-28 text-sm relative z-10"
+          value={voiceSource}
+          onChange={(e) => setVoiceSource(e.target.value as 'comfyui' | 'paid')}
+        >
+          <option value="comfyui">🎤 ComfyUI</option>
+          <option value="paid">💰 付费配音</option>
+        </select>
+
+        {/* 生图来源 */}
+        <select
+          className="input-field w-28 text-sm relative z-10"
+          value={imageSource}
+          onChange={(e) => setImageSource(e.target.value as 'comfyui' | 'paid')}
+        >
+          <option value="comfyui">🖼️ ComfyUI</option>
+          <option value="paid">💰 付费生图</option>
+        </select>
+
+        {/* 视频来源 */}
+        <select
+          className="input-field w-28 text-sm relative z-10"
+          value={videoSource}
+          onChange={(e) => setVideoSource(e.target.value as 'comfyui' | 'paid')}
+        >
+          <option value="comfyui">🎬 ComfyUI</option>
+          <option value="paid">💰 付费视频</option>
+        </select>
+
         <div className="flex items-center gap-2 ml-auto">
           <span className="text-[#a0a0a0] text-sm">并发数:</span>
           <input
@@ -923,16 +913,6 @@ const handleSaveRewritten = () => {
             onChange={(e) => dispatch({ type: 'SET_BATCH_CONCURRENCY', payload: Math.max(1, Math.min(100, parseInt(e.target.value) || 1)) })}
           />
         </div>
-        <select
-          className="input-field w-48"
-          value={selectedPresetId}
-          onChange={(e) => setSelectedPresetId(e.target.value)}
-        >
-          <option value="">使用全局设置</option>
-          {state.config.modelPresets.filter(p => p.apiKey).map(preset => (
-            <option key={preset.id} value={preset.id}>{preset.name} ({preset.modelName})</option>
-          ))}
-        </select>
       </div>
 
       <div className="flex border-b border-[#3a3a3a]">
@@ -942,7 +922,7 @@ const handleSaveRewritten = () => {
         <button onClick={() => handleTabChange('voice')} className={`tab-button ${state.currentProjectTab === 'voice' ? 'active' : ''}`}>配音 ({project.voiceDubbings?.length || 0})</button>
         <button onClick={() => handleTabChange('images')} className={`tab-button ${state.currentProjectTab === 'images' ? 'active' : ''}`}>图片 ({project.shots.filter(s => s.imageFile).length})</button>
         <button onClick={() => handleTabChange('videos')} className={`tab-button ${state.currentProjectTab === 'videos' ? 'active' : ''}`}>视频 ({project.shots.filter(s => s.videoFile).length})</button>
-        <button onClick={handleExportXlsx} className="tab-button ml-auto text-green-400">导出</button>
+        <button onClick={() => handleTabChange('export')} className={`tab-button ${state.currentProjectTab === 'export' ? 'active' : ''}`}>导出</button>
       </div>
 
       {state.currentProjectTab === 'overview' && (
@@ -1864,6 +1844,58 @@ ${scriptList}
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {state.currentProjectTab === 'export' && (
+        <div className="flex-1 overflow-y-auto p-6">
+          <div className="panel mb-6">
+            <h3 className="text-lg font-medium mb-4">📁 导出到剪映</h3>
+            <p className="text-sm text-[#a0a0a0] mb-4">
+              将分镜的图片、视频、配音、SRT字幕导出到剪映草稿箱
+            </p>
+            <button
+              onClick={() => showToast('请先在设置中配置导出目录', 'error')}
+              className="btn btn-primary"
+            >
+              🎬 导出到剪映草稿箱
+            </button>
+          </div>
+
+          <div className="panel">
+            <h3 className="text-lg font-medium mb-4">📊 导出分镜表</h3>
+            <p className="text-sm text-[#a0a0a0] mb-4">
+              导出为CSV格式，可用Excel打开
+            </p>
+            <button
+              onClick={() => {
+                const headers = ['镜号', '解说文案', '首帧图片提示词', '视频提示词', '人物', '场景'];
+                const rows = project.shots.map(shot => [
+                  shot.index,
+                  shot.content,
+                  shot.imagePrompt,
+                  shot.videoPrompt,
+                  (project.characters || []).filter(c => (shot.characterIds || []).includes(c.id)).map(c => c.name).join(', '),
+                  (project.scenes || []).filter(s => (shot.sceneIds || []).includes(s.id)).map(s => s.name).join(', '),
+                ]);
+                const csvContent = [headers, ...rows].map(row => row.map(cell => `"${(cell || '').toString().replace(/"/g, '""')}"`).join(',')).join('\n');
+                const BOM = '\uFEFF';
+                const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `${project.name}_分镜表.csv`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+                showToast('导出成功', 'success');
+              }}
+              className="btn btn-primary"
+            >
+              📥 导出CSV
+            </button>
+          </div>
         </div>
       )}
 
