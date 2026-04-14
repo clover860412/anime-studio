@@ -18,7 +18,7 @@ export default function ProjectDetail() {
   const {
     state, dispatch, getCurrentProject, getSelectedShot,
     showToast, callChatAPI, callAnalyzeAPI, callPaidImageAPI,
-    callPaidVideoAPI, queryPaidVideoStatus, callComfyUITTS,
+    callPaidVideoAPI, queryPaidVideoStatus, callComfyUITTS, callComfyUITTSMultiCharacter,
     getImageGenStatus, clearImageGenStatus
   } = useApp();
 
@@ -1618,30 +1618,59 @@ ${scriptList}
                   for (let i = 0; i < voices.length; i++) {
                     const voice = voices[i];
                     try {
-                      // 构建结构化文本（IndexTTS2 Pro 格式）
-                      const isDialogue = voice.script.includes('「') && voice.script.includes('」');
-                      let structuredText = voice.script;
-                      if (isDialogue) {
-                        // 转换「」格式为 <Character1> 格式
-                        structuredText = voice.script
-                          .replace(/「/g, '<Character1>')
-                          .replace(/」/g, '</Character1>');
+                      // 检查是否包含 #角色名 格式
+                      const hasCharacterTag = /#\S+/.test(voice.script);
+                      
+                      if (hasCharacterTag) {
+                        // 使用多角色TTS
+                        // 构建角色名->音频文件名的映射
+                        const characterAudios: Record<string, string> = {};
+                        for (const timbre of (project.voiceTimbres || [])) {
+                          if (timbre.name && timbre.referenceAudio) {
+                            const audioFileName = timbre.referenceAudio.split('/').pop() || timbre.referenceAudio;
+                            characterAudios[timbre.name] = audioFileName;
+                          }
+                        }
+                        
+                        const result = await callComfyUITTSMultiCharacter(
+                          voice.script,
+                          narratorAudio,
+                          characterAudios,
+                          voice.emotion || '无',
+                          emotionAudio
+                        );
+                        
+                        const newVoices = generatingVoices.map((v, idx) =>
+                          idx === i ? { ...v, status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl } : v
+                        );
+                        dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: newVoices } });
                       } else {
-                        structuredText = `<Narrator>${voice.script}</Narrator>`;
+                        // 使用旧版单角色TTS
+                        // 构建结构化文本（IndexTTS2 Pro 格式）
+                        const isDialogue = voice.script.includes('「') && voice.script.includes('」');
+                        let structuredText = voice.script;
+                        if (isDialogue) {
+                          // 转换「」格式为 <Character1> 格式
+                          structuredText = voice.script
+                            .replace(/「/g, '<Character1>')
+                            .replace(/」/g, '</Character1>');
+                        } else {
+                          structuredText = `<Narrator>${voice.script}</Narrator>`;
+                        }
+
+                        const result = await callComfyUITTS(
+                          structuredText,
+                          narratorAudio,
+                          narratorAudio,
+                          voice.emotion || '无',
+                          emotionAudio
+                        );
+
+                        const newVoices = generatingVoices.map((v, idx) =>
+                          idx === i ? { ...v, status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl } : v
+                        );
+                        dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: newVoices } });
                       }
-
-                      const result = await callComfyUITTS(
-                        structuredText,
-                        narratorAudio,
-                        narratorAudio,
-                        voice.emotion || '无',
-                        emotionAudio
-                      );
-
-                      const newVoices = generatingVoices.map((v, idx) =>
-                        idx === i ? { ...v, status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl } : v
-                      );
-                      dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: newVoices } });
                     } catch (e: any) {
                       const errorMsg = e?.message || String(e) || '未知错误';
                       console.error('[TTS] 错误:', errorMsg);
@@ -1820,32 +1849,63 @@ ${scriptList}
                               const audioFileName = timbre?.referenceAudio?.split('/').pop() || '';
                               const timbreEmotionAudio = timbre?.emotionAudio?.split('/').pop() || undefined;
 
-                              // 构建结构化文本（IndexTTS2 Pro 格式）
-                              const isDialogue = voice.script.includes('「') && voice.script.includes('」');
-                              let structuredText = voice.script;
-                              if (isDialogue) {
-                                structuredText = voice.script
-                                  .replace(/「/g, '<Character1>')
-                                  .replace(/」/g, '</Character1>');
+                              // 检查是否包含 #角色名 格式
+                              const hasCharacterTag = /#\S+/.test(voice.script);
+                              
+                              if (hasCharacterTag) {
+                                // 使用多角色TTS
+                                // 构建角色名->音频文件名的映射
+                                const characterAudios: Record<string, string> = {};
+                                for (const t of (project.voiceTimbres || [])) {
+                                  if (t.name && t.referenceAudio) {
+                                    const fileName = t.referenceAudio.split('/').pop() || t.referenceAudio;
+                                    characterAudios[t.name] = fileName;
+                                  }
+                                }
+                                
+                                const result = await callComfyUITTSMultiCharacter(
+                                  voice.script,
+                                  audioFileName,
+                                  characterAudios,
+                                  voice.emotion || '无',
+                                  timbreEmotionAudio
+                                );
+
+                                // 更新状态为完成
+                                const finalVoices = project.voiceDubbings.map(v =>
+                                  v.id === voice.id ? { ...v, status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl } : v
+                                );
+                                dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: finalVoices } });
+                                showToast('配音生成完成', 'success');
                               } else {
-                                structuredText = `<Narrator>${voice.script}</Narrator>`;
+                                // 使用旧版单角色TTS
+                                // 构建结构化文本（IndexTTS2 Pro 格式）
+                                const isDialogue = voice.script.includes('「') && voice.script.includes('」');
+                                let structuredText = voice.script;
+                                if (isDialogue) {
+                                  structuredText = voice.script
+                                    .replace(/「/g, '<Character1>')
+                                    .replace(/」/g, '</Character1>');
+                                } else {
+                                  structuredText = `<Narrator>${voice.script}</Narrator>`;
+                                }
+
+                                // 调用 ComfyUI IndexTTS2
+                                const result = await callComfyUITTS(
+                                  structuredText,
+                                  audioFileName,
+                                  audioFileName,
+                                  voice.emotion || '无',
+                                  timbreEmotionAudio
+                                );
+
+                                // 更新状态为完成
+                                const finalVoices = project.voiceDubbings.map(v =>
+                                  v.id === voice.id ? { ...v, status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl } : v
+                                );
+                                dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: finalVoices } });
+                                showToast('配音生成完成', 'success');
                               }
-
-                              // 调用 ComfyUI IndexTTS2
-                              const result = await callComfyUITTS(
-                                structuredText,
-                                audioFileName,
-                                audioFileName,
-                                voice.emotion || '无',
-                                timbreEmotionAudio
-                              );
-
-                              // 更新状态为完成
-                              const finalVoices = project.voiceDubbings.map(v =>
-                                v.id === voice.id ? { ...v, status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl } : v
-                              );
-                              dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: finalVoices } });
-                              showToast('配音生成完成', 'success');
                             } catch (e: any) {
                               const errorMsg = e?.message || String(e) || '未知错误';
                               console.error('[TTS] 错误:', errorMsg);

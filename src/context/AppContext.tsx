@@ -422,6 +422,8 @@ interface AppContextType {
   clearImageGenStatus: (shotId: string) => void;
   // ComfyUI TTS配音
   callComfyUITTS: (structuredText: string, narratorAudio?: string, characterAudio?: string, emotion?: string, emotionAudio?: string) => Promise<{audioUrl: string; duration: number}>;
+  // ComfyUI TTS配音（多角色版本）
+  callComfyUITTSMultiCharacter: (script: string, narratorAudio?: string, characterAudios?: Record<string, string>, emotion?: string, emotionAudio?: string) => Promise<{audioUrl: string; duration: number}>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -971,7 +973,257 @@ export function AppProvider({ children }: AppProviderProps) {
     };
   };
 
-  // 调用 ComfyUI IndexTTS2 Pro 生成配音
+  // 解析多角色文案格式
+  // 输入格式: "他边走边说："今天天气真好呀！"#小明"
+  // 输出格式: { parts: [{type: 'narration'|'dialogue', content: string, character?: string}], characters: string[] }
+  const parseMultiCharacterScript = (script: string): { parts: { type: 'narration' | 'dialogue'; content: string; character?: string }[]; characters: string[] } => {
+    const parts: { type: 'narration' | 'dialogue'; content: string; character?: string }[] = [];
+    const characters = new Set<string>();
+    
+    // 正则匹配: 旁白内容:"对话"#角色名  或者  旁白内容:"对话"
+    // 模式: (旁白内容):(对话内容)#(角色名)
+    const regex = /([^"：:。；？\n]*)["""]([^""]+)["""]#(\S+)|([^"：:。；？\n]*)["""]([^""]+)["""]/g;
+    let lastIndex = 0;
+    let match;
+    
+    while ((match = regex.exec(script)) !== null) {
+      // 旁白部分
+      const narrationPart = match[1] || match[4] || '';
+      const dialoguePart = match[2] || match[5] || '';
+      const characterName = match[3] || '';
+      
+      // 如果有旁白
+      if (narrationPart.trim()) {
+        parts.push({ type: 'narration', content: narrationPart.trim() });
+      }
+      
+      // 对话部分
+      if (dialoguePart.trim()) {
+        if (characterName) {
+          characters.add(characterName);
+          parts.push({ type: 'dialogue', content: dialoguePart.trim(), character: characterName });
+        } else {
+          // 没有角色名，默认作为旁白
+          parts.push({ type: 'narration', content: dialoguePart.trim() });
+        }
+      }
+      
+      lastIndex = regex.lastIndex;
+    }
+    
+    // 处理剩余文本（没有匹配到的部分）
+    const remaining = script.slice(lastIndex).trim();
+    if (remaining) {
+      parts.push({ type: 'narration', content: remaining });
+    }
+    
+    return { parts, characters: Array.from(characters) };
+  };
+
+  // 将解析后的parts转换为IndexTTS2 Pro格式
+  const convertToIndexTTSFormat = (parts: { type: 'narration' | 'dialogue'; content: string; character?: string }[], characterMapping: Record<string, string>): string => {
+    let result = '';
+    
+    for (const part of parts) {
+      if (part.type === 'narration') {
+        result += `<Narrator>${part.content}`;
+      } else if (part.type === 'dialogue' && part.character) {
+        const index = characterMapping[part.character];
+        if (index) {
+          result += `<Character${index}>${part.content}`;
+        } else {
+          // 如果找不到映射，默认用Character1
+          result += `<Character1>${part.content}`;
+        }
+      }
+    }
+    
+    return result;
+  };
+
+  // 调用 ComfyUI IndexTTS2 Pro 生成配音（支持多角色）
+  const callComfyUITTSMultiCharacter = async (
+    script: string,
+    narratorAudio?: string,
+    characterAudios?: Record<string, string>, // { "角色名": "音频文件名" }
+    emotion?: string,
+    emotionAudio?: string
+  ): Promise<{ audioUrl: string; duration: number }> => {
+    const comfyuiUrl = state.config.basic.comfyuiVoiceUrl?.replace(/\/$/, '') || 'http://127.0.0.1:8188';
+    const seed = Math.floor(Math.random() * 4294967295);
+    console.log('[TTS] 开始生成多角色配音');
+    console.log('[TTS] ComfyUI地址:', comfyuiUrl);
+    console.log('[TTS] 原始脚本:', script);
+
+    // 解析脚本
+    const { parts, characters } = parseMultiCharacterScript(script);
+    console.log('[TTS] 解析结果:', { parts, characters });
+
+    // 建立角色索引映射 (角色名 -> 1,2,3,4,5)
+    const characterMapping: Record<string, string> = {};
+    characters.slice(0, 5).forEach((name, index) => {
+      characterMapping[name] = String(index + 1);
+    });
+    console.log('[TTS] 角色映射:', characterMapping);
+
+    // 转换为IndexTTS2 Pro格式
+    const structuredText = convertToIndexTTSFormat(parts, characterMapping);
+    console.log('[TTS] 转换后文本:', structuredText);
+
+    const ttsNodeInputs: any = {
+      structured_text: structuredText,
+      mode: "Auto",
+      emotion_weight: 0.8,
+      do_sample_mode: "on",
+      temperature: 0.8,
+      top_p: 0.9,
+      top_k: 30,
+      num_beams: 3,
+      repetition_penalty: 10,
+      length_penalty: 0,
+      max_mel_tokens: 1815,
+      max_tokens_per_sentence: 120,
+      seed: seed,
+    };
+
+    if (emotion && emotion !== '无') {
+      ttsNodeInputs.emotion_description = emotion;
+    }
+
+    // 构建workflow节点
+    const workflow: any = {};
+    let nodeIndex = 3;
+
+    // narrator audio
+    workflow[String(nodeIndex)] = { 
+      "inputs": { 
+        "audio": narratorAudio || "", 
+        "audioUI": narratorAudio ? `/api/view?filename=${encodeURIComponent(narratorAudio || '')}&type=input&subfolder=&rand=${Math.random()}` : "" 
+      }, 
+      "class_type": "LoadAudio" 
+    };
+    const narratorNodeId = String(nodeIndex);
+    nodeIndex++;
+
+    // character audios (最多5个)
+    const characterNodeIds: Record<string, string> = {};
+    for (const charName of characters.slice(0, 5)) {
+      const audioFile = characterAudios?.[charName] || narratorAudio || '';
+      workflow[String(nodeIndex)] = { 
+        "inputs": { 
+          "audio": audioFile, 
+          "audioUI": audioFile ? `/api/view?filename=${encodeURIComponent(audioFile)}&type=input&subfolder=&rand=${Math.random()}` : "" 
+        }, 
+        "class_type": "LoadAudio" 
+      };
+      characterNodeIds[charName] = String(nodeIndex);
+      nodeIndex++;
+    }
+
+    // emotion audio (可选)
+    let emotionNodeId: string | null = null;
+    if (emotionAudio) {
+      workflow[String(nodeIndex)] = { 
+        "inputs": { 
+          "audio": emotionAudio, 
+          "audioUI": `/api/view?filename=${encodeURIComponent(emotionAudio)}&type=input&subfolder=&rand=${Math.random()}` 
+        }, 
+        "class_type": "LoadAudio" 
+      };
+      emotionNodeId = String(nodeIndex);
+      nodeIndex++;
+    }
+
+    // IndexTTS2ProNode
+    const ttsNodeId = String(nodeIndex);
+    nodeIndex++;
+
+    // 构建TTS节点输入
+    const ttsInputs: any = { ...ttsNodeInputs };
+    ttsInputs.narrator_audio = [narratorNodeId, 0];
+
+    // 连接角色音频
+    for (const charName of characters.slice(0, 5)) {
+      const charIndex = characters.indexOf(charName);
+      ttsInputs[`character${charIndex + 1}_audio`] = [characterNodeIds[charName], 0];
+    }
+
+    // 连接情绪音频
+    if (emotionNodeId) {
+      ttsInputs.emo_ref_audio = [emotionNodeId, 0];
+    }
+
+    workflow[ttsNodeId] = { 
+      "inputs": ttsInputs, 
+      "class_type": "IndexTTS2ProNode" 
+    };
+
+    // SaveAudio节点
+    const saveNodeId = String(nodeIndex);
+    workflow[saveNodeId] = { 
+      "inputs": { "filename_prefix": "anime-studio-tts-multi", "audio": [ttsNodeId, 0] }, 
+      "class_type": "SaveAudio" 
+    };
+
+    console.log('[TTS] 工作流节点:', JSON.stringify(workflow, null, 2));
+
+    const promptId = `tts_multi_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const promptPayload = { prompt: workflow };
+
+    console.log('[TTS] 通过Tauri命令调用ComfyUI...');
+    
+    try {
+      const result = await (window as any).__TAURI__.core.invoke('comfyui_post', {
+        url: `${comfyuiUrl}/api/prompt`,
+        body: JSON.stringify(promptPayload)
+      });
+      
+      const data = JSON.parse(result as string);
+      console.log('[TTS] 返回数据:', JSON.stringify(data).substring(0, 200));
+      
+      if (data.error) {
+        throw new Error(`ComfyUI错误: ${JSON.stringify(data.error).substring(0, 200)}`);
+      }
+      
+      const returnedPromptId = data.prompt_id || promptId;
+      console.log('[TTS] prompt_id:', returnedPromptId);
+
+      let attempts = 0;
+      const maxAttempts = 120;
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        const historyResult = await (window as any).__TAURI__.core.invoke('comfyui_get', {
+          url: `${comfyuiUrl}/api/history/${returnedPromptId}`
+        });
+        
+        const history = JSON.parse(historyResult as string);
+        console.log(`[TTS] 第${attempts + 1}次查询`);
+        
+        if (history[returnedPromptId]) {
+          const outputs = history[returnedPromptId].outputs;
+          for (const nodeId in outputs) {
+            if (outputs[nodeId].audio && Array.isArray(outputs[nodeId].audio)) {
+              const audioInfo = outputs[nodeId].audio[0];
+              const filename = audioInfo.filename;
+              const subfolder = audioInfo.subfolder || 'audio';
+              const audioUrl = `${comfyuiUrl}/api/view?filename=${encodeURIComponent(filename)}&type=output&subfolder=${subfolder}`;
+              console.log('[TTS] 生成成功, audioUrl:', audioUrl);
+              return { audioUrl, duration: 0 };
+            }
+          }
+        }
+        attempts++;
+      }
+      
+      throw new Error('TTS 生成超时');
+    } catch (e: any) {
+      console.error('[TTS] 错误:', e?.message || e);
+      throw e;
+    }
+  };
+
+  // 旧版单角色TTS（保留兼容）
   const callComfyUITTS = async (
     structuredText: string,
     narratorAudio?: string,
@@ -1101,7 +1353,7 @@ export function AppProvider({ children }: AppProviderProps) {
     <AppContext.Provider value={{
       state, dispatch, showToast, saveConfig, loadConfig, resetConfig,
       getCurrentProject, getSelectedShot, callChatAPI, callAnalyzeAPI, callImageAPI, callPaidImageAPI,
-      callVideoAPI, callPaidVideoAPI, queryVideoStatus, queryPaidVideoStatus, callComfyUITTS,
+      callVideoAPI, callPaidVideoAPI, queryVideoStatus, queryPaidVideoStatus, callComfyUITTS, callComfyUITTSMultiCharacter,
       getImageGenStatus, clearImageGenStatus
     }}>
       {children}

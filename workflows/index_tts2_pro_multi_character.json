@@ -1,0 +1,80 @@
+{
+  "id": "index_tts2_pro_multi_character",
+  "version": 1,
+  "name": "IndexTTS2 Pro 多角色配音",
+  "description": "支持多角色对话的IndexTTS2 Pro工作流",
+  "nodes": [
+    {
+      "id": "load_narrator",
+      "type": "LoadAudio",
+      "pos": [100, 300],
+      "widgets_values": ["narrator_ref.wav", null, null]
+    },
+    {
+      "id": "load_character1",
+      "type": "LoadAudio",
+      "pos": [100, 600],
+      "widgets_values": ["character1_ref.wav", null, null]
+    },
+    {
+      "id": "load_character2",
+      "type": "LoadAudio",
+      "pos": [100, 900],
+      "widgets_values": ["character2_ref.wav", null, null]
+    },
+    {
+      "id": "load_character3",
+      "type": "LoadAudio",
+      "pos": [100, 1200],
+      "widgets_values": ["character3_ref.wav", null, null]
+    },
+    {
+      "id": "load_character4",
+      "type": "LoadAudio",
+      "pos": [100, 1500],
+      "widgets_values": ["character4_ref.wav", null, null]
+    },
+    {
+      "id": "load_character5",
+      "type": "LoadAudio",
+      "pos": [100, 1800],
+      "widgets_values": ["character5_ref.wav", null, null]
+    },
+    {
+      "id": "index_tts2_pro",
+      "type": "IndexTTS2ProNode",
+      "pos": [600, 400],
+      "widgets_values": [
+        "<Narrator>旁白内容<Character1>角色1对话<Character2>角色2对话",
+        "Auto",
+        0.8,
+        "on",
+        0.8,
+        0.9,
+        30,
+        3,
+        10,
+        0,
+        1815,
+        120,
+        1234567890,
+        "randomize"
+      ]
+    },
+    {
+      "id": "save_audio",
+      "type": "SaveAudio",
+      "pos": [1000, 400],
+      "widgets_values": ["audio/ComfyUI"]
+    }
+  ],
+  "links": [
+    {"from": "load_narrator", "from_port": 0, "to": "index_tts2_pro", "to_port": "narrator_audio"},
+    {"from": "load_character1", "from_port": 0, "to": "index_tts2_pro", "to_port": "character1_audio"},
+    {"from": "load_character2", "from_port": 0, "to": "index_tts2_pro", "to_port": "character2_audio"},
+    {"from": "load_character3", "from_port": 0, "to": "index_tts2_pro", "to_port": "character3_audio"},
+    {"from": "load_character4", "from_port": 0, "to": "index_tts2_pro", "to_port": "character4_audio"},
+    {"from": "load_character5", "from_port": 0, "to": "index_tts2_pro", "to_port": "character5_audio"},
+    {"from": "index_tts2_pro", "from_port": "audio", "to": "save_audio", "to_port": "audio"}
+  ]
+}
