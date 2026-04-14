@@ -1567,10 +1567,9 @@ ${scriptList}
                         idx === i ? { ...v, status: 'failed' as Voice['status'], error: errorMsg } : v
                       );
                       dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: newVoices } });
+                      showToast('配音生成失败: ' + errorMsg.substring(0, 80), 'error');
                     }
                   }
-
-                  showToast('配音生成完成', 'success');
                 }}
                 className="btn btn-primary"
                 disabled={!state.config.basic.comfyuiVoiceUrl}
