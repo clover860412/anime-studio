@@ -1011,14 +1011,14 @@ export function AppProvider({ children }: AppProviderProps) {
     };
 
     const promptId = `tts_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const promptData = [1, promptId, workflow];
+    const promptPayload = { prompt: workflow };
 
     console.log('[TTS] 通过Tauri命令调用ComfyUI...');
     
     try {
       const result = await (window as any).__TAURI__.core.invoke('comfyui_post', {
         url: `${comfyuiUrl}/api/prompt`,
-        body: JSON.stringify({ prompt: promptData })
+        body: JSON.stringify(promptPayload)
       });
       
       const data = JSON.parse(result as string);
