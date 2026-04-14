@@ -1311,11 +1311,41 @@ const handleSaveRewritten = () => {
                       const file = e.target.files?.[0];
                       if (file) {
                         const reader = new FileReader();
-                        reader.onload = (ev) => {
-                          const updated = project.voiceTimbres.map(t =>
-                            t.id === timbre.id ? { ...t, referenceAudio: ev.target?.result as string } : t
-                          );
-                          dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceTimbres: updated } });
+                        reader.onload = async (ev) => {
+                          const dataUrl = ev.target?.result as string;
+                          if (dataUrl && dataUrl.startsWith('data:')) {
+                            // 提取文件名和base64内容
+                            const fileName = file.name;
+                            const base64Content = dataUrl.split(',')[1];
+                            
+                            // 调用Rust命令复制到ComfyUI input文件夹
+                            const comfyuiPath = state.config.basic.comfyuiPath || 'D:\\\\ComfyUI-aki-v3\\\\ComfyUI';
+                            try {
+                              await (window as any).__TAURI__.core.invoke('copy_file_to_path', {
+                                destPath: `${comfyuiPath}\\input`,
+                                fileName: fileName,
+                                contentBase64: base64Content
+                              });
+                              // 只存储文件名，不存储base64数据
+                              const updated = project.voiceTimbres.map(t =>
+                                t.id === timbre.id ? { ...t, referenceAudio: fileName } : t
+                              );
+                              dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceTimbres: updated } });
+                              showToast(`已复制音频到ComfyUI: ${fileName}`, 'success');
+                            } catch (err) {
+                              showToast('复制音频失败: ' + String(err), 'error');
+                              // 即使失败也保存本地引用
+                              const updated = project.voiceTimbres.map(t =>
+                                t.id === timbre.id ? { ...t, referenceAudio: dataUrl } : t
+                              );
+                              dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceTimbres: updated } });
+                            }
+                          } else {
+                            const updated = project.voiceTimbres.map(t =>
+                              t.id === timbre.id ? { ...t, referenceAudio: dataUrl } : t
+                            );
+                            dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceTimbres: updated } });
+                          }
                         };
                         reader.readAsDataURL(file);
                       }
@@ -1324,6 +1354,56 @@ const handleSaveRewritten = () => {
                   {timbre.referenceAudio && (
                     <audio controls className="h-6 w-24">
                       <source src={timbre.referenceAudio} />
+                    </audio>
+                  )}
+                  {/* 情绪参考音频上传 */}
+                  <span className="text-xs text-[#a0a0a0] ml-2">情绪:</span>
+                  <input
+                    type="file"
+                    accept="audio/*"
+                    className="text-xs text-[#a0a0a0] file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-[#4a4a4a] file:text-white"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = async (ev) => {
+                          const dataUrl = ev.target?.result as string;
+                          if (dataUrl && dataUrl.startsWith('data:')) {
+                            const fileName = file.name;
+                            const base64Content = dataUrl.split(',')[1];
+                            const comfyuiPath = state.config.basic.comfyuiPath || 'D:\\\\ComfyUI-aki-v3\\\\ComfyUI';
+                            try {
+                              await (window as any).__TAURI__.core.invoke('copy_file_to_path', {
+                                destPath: `${comfyuiPath}\\\\input`,
+                                fileName: fileName,
+                                contentBase64: base64Content
+                              });
+                              const updated = project.voiceTimbres.map(t =>
+                                t.id === timbre.id ? { ...t, emotionAudio: fileName } : t
+                              );
+                              dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceTimbres: updated } });
+                              showToast(`已复制情绪音频: ${fileName}`, 'success');
+                            } catch (err) {
+                              showToast('复制情绪音频失败: ' + String(err), 'error');
+                              const updated = project.voiceTimbres.map(t =>
+                                t.id === timbre.id ? { ...t, emotionAudio: dataUrl } : t
+                              );
+                              dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceTimbres: updated } });
+                            }
+                          } else {
+                            const updated = project.voiceTimbres.map(t =>
+                              t.id === timbre.id ? { ...t, emotionAudio: dataUrl } : t
+                            );
+                            dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceTimbres: updated } });
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }}
+                  />
+                  {timbre.emotionAudio && (
+                    <audio controls className="h-6 w-24">
+                      <source src={timbre.emotionAudio} />
                     </audio>
                   )}
                   {/* 删除 */}
@@ -1528,6 +1608,7 @@ ${scriptList}
                   // 获取参考音频
                   const timbre = project.voiceTimbres?.[0];
                   const narratorAudio = timbre?.referenceAudio?.split('/').pop() || '';
+                  const emotionAudio = timbre?.emotionAudio?.split('/').pop() || undefined;
 
                   // 更新所有配音状态为生成中
                   const generatingVoices = voices.map(v => ({ ...v, status: 'generating' as Voice['status'] }));
@@ -1553,7 +1634,8 @@ ${scriptList}
                         structuredText,
                         narratorAudio,
                         narratorAudio,
-                        voice.emotion || '无'
+                        voice.emotion || '无',
+                        emotionAudio
                       );
 
                       const newVoices = generatingVoices.map((v, idx) =>
@@ -1736,6 +1818,7 @@ ${scriptList}
                               // 查找音色对应的参考音频
                               const timbre = project.voiceTimbres?.find(t => t.name === voice.timbre);
                               const audioFileName = timbre?.referenceAudio?.split('/').pop() || '';
+                              const timbreEmotionAudio = timbre?.emotionAudio?.split('/').pop() || undefined;
 
                               // 构建结构化文本（IndexTTS2 Pro 格式）
                               const isDialogue = voice.script.includes('「') && voice.script.includes('」');
@@ -1753,7 +1836,8 @@ ${scriptList}
                                 structuredText,
                                 audioFileName,
                                 audioFileName,
-                                voice.emotion || '无'
+                                voice.emotion || '无',
+                                timbreEmotionAudio
                               );
 
                               // 更新状态为完成

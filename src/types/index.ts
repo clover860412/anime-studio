@@ -98,7 +98,8 @@ export interface CharacterTimbre {
   characterId?: string;     // 关联的人物ID（可选）
   name: string;             // 音色名称
   description?: string;     // 音色描述
-  referenceAudio?: string;   // 参考音频（base64或URL）
+  referenceAudio?: string;   // 参考音频（文件名或base64）
+  emotionAudio?: string;   // 情绪参考音频（文件名或base64）
 }
 
 // 分镜

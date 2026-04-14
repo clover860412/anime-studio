@@ -421,7 +421,7 @@ interface AppContextType {
   getImageGenStatus: (shotId: string) => AppState['imageGenTasks'][string] | undefined;
   clearImageGenStatus: (shotId: string) => void;
   // ComfyUI TTS配音
-  callComfyUITTS: (structuredText: string, narratorAudio?: string, characterAudio?: string, emotion?: string) => Promise<{audioUrl: string; duration: number}>;
+  callComfyUITTS: (structuredText: string, narratorAudio?: string, characterAudio?: string, emotion?: string, emotionAudio?: string) => Promise<{audioUrl: string; duration: number}>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -976,7 +976,8 @@ export function AppProvider({ children }: AppProviderProps) {
     structuredText: string,
     narratorAudio?: string,
     characterAudio?: string,
-    emotion?: string
+    emotion?: string,
+    emotionAudio?: string
   ): Promise<{ audioUrl: string; duration: number }> => {
     const comfyuiUrl = state.config.basic.comfyuiVoiceUrl?.replace(/\/$/, '') || 'http://127.0.0.1:8188';
     const seed = Math.floor(Math.random() * 4294967295);
@@ -1003,12 +1004,24 @@ export function AppProvider({ children }: AppProviderProps) {
       ttsNodeInputs.emotion_description = emotion;
     }
 
+    // 构建workflow节点
     const workflow: any = {
       "3": { "inputs": { "audio": narratorAudio || "", "audioUI": narratorAudio ? `/api/view?filename=${encodeURIComponent(narratorAudio || '')}&type=input&subfolder=&rand=${Math.random()}` : "" }, "class_type": "LoadAudio" },
-      "4": { "inputs": { "audio": characterAudio || narratorAudio || "", "audioUI": (characterAudio || narratorAudio) ? `/api/view?filename=${encodeURIComponent((characterAudio || narratorAudio) || '')}&type=input&subfolder=&rand=${Math.random()}` : "" }, "class_type": "LoadAudio" },
-      "5": { "inputs": { ...ttsNodeInputs, "narrator_audio": ["3", 0], "character1_audio": ["4", 0] }, "class_type": "IndexTTS2ProNode" },
-      "6": { "inputs": { "filename_prefix": "anime-studio-tts", "audio": ["5", 0] }, "class_type": "SaveAudio" }
+      "4": { "inputs": { "audio": characterAudio || narratorAudio || "", "audioUI": (characterAudio || narratorAudio) ? `/api/view?filename=${encodeURIComponent((characterAudio || narratorAudio) || '')}&type=input&subfolder=&rand=${Math.random()}` : "" }, "class_type": "LoadAudio" }
     };
+    
+    // 如果有情绪参考音频，添加情绪LoadAudio节点
+    if (emotionAudio) {
+      workflow["5"] = { "inputs": { "audio": emotionAudio, "audioUI": `/api/view?filename=${encodeURIComponent(emotionAudio)}&type=input&subfolder=&rand=${Math.random()}` }, "class_type": "LoadAudio" };
+      workflow["6"] = { "inputs": { ...ttsNodeInputs, "narrator_audio": ["3", 0], "character1_audio": ["4", 0], "emo_ref_audio": ["5", 0] }, "class_type": "IndexTTS2ProNode" };
+    } else {
+      workflow["5"] = { "inputs": { ...ttsNodeInputs, "narrator_audio": ["3", 0], "character1_audio": ["4", 0] }, "class_type": "IndexTTS2ProNode" };
+    }
+    
+    workflow["6"] = workflow["6"] || { "inputs": { "filename_prefix": "anime-studio-tts", "audio": ["6", 0] }, "class_type": "SaveAudio" };
+    if (!emotionAudio) {
+      workflow["7"] = { "inputs": { "filename_prefix": "anime-studio-tts", "audio": ["6", 0] }, "class_type": "SaveAudio" };
+    }
 
     const promptId = `tts_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const promptPayload = { prompt: workflow };
