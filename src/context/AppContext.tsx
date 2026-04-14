@@ -1043,11 +1043,14 @@ export function AppProvider({ children }: AppProviderProps) {
 
     console.log('[TTS] 提交workflow到ComfyUI...');
 
-    // 提交到 ComfyUI
+    // 提交到 ComfyUI - ComfyUI v2 格式: [2, prompt_id, nodes]
+    const promptId = `tts_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const promptData = [2, promptId, workflow];
+    
     const response = await fetch(`${comfyuiUrl}/api/prompt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: workflow })
+      body: JSON.stringify({ prompt: promptData })
     });
 
     console.log('[TTS] 响应状态:', response.status);
@@ -1068,8 +1071,15 @@ export function AppProvider({ children }: AppProviderProps) {
     }
 
     const data = await response.json();
-    console.log('[TTS] prompt_id:', data.prompt_id);
-    const promptId = data.prompt_id;
+    console.log('[TTS] 返回数据:', JSON.stringify(data).substring(0, 200));
+    
+    if (data.error) {
+      console.error('[TTS] ComfyUI错误:', data.error);
+      throw new Error(`ComfyUI错误: ${JSON.stringify(data.error).substring(0, 200)}`);
+    }
+    
+    const returnedPromptId = data.prompt_id || promptId;
+    console.log('[TTS] prompt_id:', returnedPromptId);
 
     // 轮询等待完成
     let attempts = 0;
@@ -1077,12 +1087,12 @@ export function AppProvider({ children }: AppProviderProps) {
     while (attempts < maxAttempts) {
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      const historyRes = await fetch(`${comfyuiUrl}/api/history/${promptId}`);
+      const historyRes = await fetch(`${comfyuiUrl}/api/history/${returnedPromptId}`);
       if (historyRes.ok) {
         const history = await historyRes.json();
         console.log(`[TTS] 第${attempts + 1}次查询, history keys:`, Object.keys(history));
-        if (history[promptId]) {
-          const outputs = history[promptId].outputs;
+        if (history[returnedPromptId]) {
+          const outputs = history[returnedPromptId].outputs;
           console.log('[TTS] outputs:', JSON.stringify(outputs));
           // 找到 SaveAudio 节点的输出
           for (const nodeId in outputs) {
