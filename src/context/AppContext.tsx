@@ -979,7 +979,7 @@ export function AppProvider({ children }: AppProviderProps) {
     emotion?: string
   ): Promise<{ audioUrl: string; duration: number }> => {
     const comfyuiUrl = state.config.basic.comfyuiVoiceUrl?.replace(/\/$/, '') || 'http://127.0.0.1:8188';
-    const seed = Math.floor(Math.random() * 9999999999);
+    const seed = Math.floor(Math.random() * 4294967295);
     console.log('[TTS] 开始生成配音');
     console.log('[TTS] ComfyUI地址:', comfyuiUrl);
     console.log('[TTS] 文本:', structuredText);
