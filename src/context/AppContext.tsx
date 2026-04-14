@@ -974,19 +974,15 @@ export function AppProvider({ children }: AppProviderProps) {
   // 调用 ComfyUI IndexTTS2 Pro 生成配音
   const callComfyUITTS = async (
     structuredText: string,
-    narratorAudio?: string,  // 旁白参考音频文件名
-    characterAudio?: string,  // 角色参考音频文件名
+    narratorAudio?: string,
+    characterAudio?: string,
     emotion?: string
   ): Promise<{ audioUrl: string; duration: number }> => {
     const comfyuiUrl = state.config.basic.comfyuiVoiceUrl?.replace(/\/$/, '') || 'http://127.0.0.1:8188';
     const seed = Math.floor(Math.random() * 4294967295);
     console.log('[TTS] 开始生成配音');
     console.log('[TTS] ComfyUI地址:', comfyuiUrl);
-    console.log('[TTS] 文本:', structuredText);
-    console.log('[TTS] 旁白音频:', narratorAudio);
-    console.log('[TTS] 角色音频:', characterAudio);
 
-    // 构建 IndexTTS2ProNode 的输入
     const ttsNodeInputs: any = {
       structured_text: structuredText,
       mode: "Auto",
@@ -1003,117 +999,73 @@ export function AppProvider({ children }: AppProviderProps) {
       seed: seed,
     };
 
-    // 如果有情绪描述
     if (emotion && emotion !== '无') {
       ttsNodeInputs.emotion_description = emotion;
     }
 
-    // 构建完整的 workflow
     const workflow: any = {
-      "3": {  // LoadAudio for narrator
-        "inputs": {
-          "audio": narratorAudio || "",
-          "audioUI": narratorAudio ? `/api/view?filename=${encodeURIComponent(narratorAudio || '')}&type=input&subfolder=&rand=${Math.random()}` : ""
-        },
-        "class_type": "LoadAudio"
-      },
-      "4": {  // LoadAudio for character
-        "inputs": {
-          "audio": characterAudio || narratorAudio || "",
-          "audioUI": (characterAudio || narratorAudio) ? `/api/view?filename=${encodeURIComponent((characterAudio || narratorAudio) || '')}&type=input&subfolder=&rand=${Math.random()}` : ""
-        },
-        "class_type": "LoadAudio"
-      },
-      "5": {  // IndexTTS2ProNode
-        "inputs": {
-          ...ttsNodeInputs,
-          "narrator_audio": ["3", 0],
-          "character1_audio": ["4", 0]
-        },
-        "class_type": "IndexTTS2ProNode"
-      },
-      "6": {  // SaveAudio
-        "inputs": {
-          "filename_prefix": "anime-studio-tts",
-          "audio": ["5", 0]
-        },
-        "class_type": "SaveAudio"
-      }
+      "3": { "inputs": { "audio": narratorAudio || "", "audioUI": narratorAudio ? `/api/view?filename=${encodeURIComponent(narratorAudio || '')}&type=input&subfolder=&rand=${Math.random()}` : "" }, "class_type": "LoadAudio" },
+      "4": { "inputs": { "audio": characterAudio || narratorAudio || "", "audioUI": (characterAudio || narratorAudio) ? `/api/view?filename=${encodeURIComponent((characterAudio || narratorAudio) || '')}&type=input&subfolder=&rand=${Math.random()}` : "" }, "class_type": "LoadAudio" },
+      "5": { "inputs": { ...ttsNodeInputs, "narrator_audio": ["3", 0], "character1_audio": ["4", 0] }, "class_type": "IndexTTS2ProNode" },
+      "6": { "inputs": { "filename_prefix": "anime-studio-tts", "audio": ["5", 0] }, "class_type": "SaveAudio" }
     };
 
-    console.log('[TTS] 提交workflow到ComfyUI...');
-
-    // 提交到 ComfyUI - ComfyUI v2 格式: [2, prompt_id, nodes]
     const promptId = `tts_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const promptData = [2, promptId, workflow];
+
+    console.log('[TTS] 通过Tauri命令调用ComfyUI...');
     
-    const response = await fetch(`${comfyuiUrl}/api/prompt`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: promptData })
-    });
+    try {
+      const result = await (window as any).__TAURI__.core.invoke('comfyui_post', {
+        url: `${comfyuiUrl}/api/prompt`,
+        body: JSON.stringify({ prompt: promptData })
+      });
+      
+      const data = JSON.parse(result as string);
+      console.log('[TTS] 返回数据:', JSON.stringify(data).substring(0, 200));
+      
+      if (data.error) {
+        throw new Error(`ComfyUI错误: ${JSON.stringify(data.error).substring(0, 200)}`);
+      }
+      
+      const returnedPromptId = data.prompt_id || promptId;
+      console.log('[TTS] prompt_id:', returnedPromptId);
 
-    console.log('[TTS] 响应状态:', response.status);
-    console.log('[TTS] 响应头:', response.headers.get('content-type'));
+      let attempts = 0;
+      const maxAttempts = 120;
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
-    // 检查返回的是否为HTML（可能是404或错误页面）
-    const contentType = response.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) {
-      const text = await response.text();
-      console.error('[TTS] 非JSON响应:', text.substring(0, 200));
-      throw new Error(`ComfyUI返回了非JSON格式: ${response.status}。请检查ComfyUI是否在运行，或地址是否正确。`);
-    }
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('[TTS] 请求失败:', errorText);
-      throw new Error(`ComfyUI 请求失败: ${response.status} - ${errorText}`);
-    }
-
-    const data = await response.json();
-    console.log('[TTS] 返回数据:', JSON.stringify(data).substring(0, 200));
-    
-    if (data.error) {
-      console.error('[TTS] ComfyUI错误:', data.error);
-      throw new Error(`ComfyUI错误: ${JSON.stringify(data.error).substring(0, 200)}`);
-    }
-    
-    const returnedPromptId = data.prompt_id || promptId;
-    console.log('[TTS] prompt_id:', returnedPromptId);
-
-    // 轮询等待完成
-    let attempts = 0;
-    const maxAttempts = 120; // 最多等2分钟
-    while (attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      const historyRes = await fetch(`${comfyuiUrl}/api/history/${returnedPromptId}`);
-      if (historyRes.ok) {
-        const history = await historyRes.json();
-        console.log(`[TTS] 第${attempts + 1}次查询, history keys:`, Object.keys(history));
+        const historyResult = await (window as any).__TAURI__.core.invoke('comfyui_get', {
+          url: `${comfyuiUrl}/api/history/${returnedPromptId}`
+        });
+        
+        const history = JSON.parse(historyResult as string);
+        console.log(`[TTS] 第${attempts + 1}次查询`);
+        
         if (history[returnedPromptId]) {
           const outputs = history[returnedPromptId].outputs;
-          console.log('[TTS] outputs:', JSON.stringify(outputs));
-          // 找到 SaveAudio 节点的输出
           for (const nodeId in outputs) {
             if (outputs[nodeId].audio && Array.isArray(outputs[nodeId].audio)) {
               const audioInfo = outputs[nodeId].audio[0];
               const filename = audioInfo.filename;
               const subfolder = audioInfo.subfolder || 'audio';
-              // 转换为本机可访问的URL
               const audioUrl = `${comfyuiUrl}/api/view?filename=${encodeURIComponent(filename)}&type=output&subfolder=${subfolder}`;
               console.log('[TTS] 生成成功, audioUrl:', audioUrl);
-              return { audioUrl, duration: 0 }; // duration 后续计算
+              return { audioUrl, duration: 0 };
             }
           }
         }
+        attempts++;
       }
-      attempts++;
+      
+      throw new Error('TTS 生成超时');
+    } catch (e: any) {
+      console.error('[TTS] 错误:', e?.message || e);
+      throw e;
     }
-
-    console.error('[TTS] 生成超时');
-    throw new Error('TTS 生成超时');
   };
+
 
   // 项目变化时自动保存
   useEffect(() => {
