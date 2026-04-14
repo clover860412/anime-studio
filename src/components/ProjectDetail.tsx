@@ -18,7 +18,7 @@ export default function ProjectDetail() {
   const {
     state, dispatch, getCurrentProject, getSelectedShot,
     showToast, callChatAPI, callAnalyzeAPI, callPaidImageAPI,
-    callPaidVideoAPI, queryPaidVideoStatus,
+    callPaidVideoAPI, queryPaidVideoStatus, callComfyUITTS,
     getImageGenStatus, clearImageGenStatus
   } = useApp();
 
@@ -1525,18 +1525,39 @@ ${scriptList}
                     return;
                   }
 
+                  // 获取参考音频
+                  const timbre = project.voiceTimbres?.[0];
+                  const narratorAudio = timbre?.referenceAudio?.split('/').pop() || '';
+
                   // 更新所有配音状态为生成中
                   const generatingVoices = voices.map(v => ({ ...v, status: 'generating' as Voice['status'] }));
                   dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: generatingVoices } });
 
                   // 逐个生成配音
                   for (let i = 0; i < voices.length; i++) {
+                    const voice = voices[i];
                     try {
-                      // TODO: 调用 ComfyUI API
-                      await new Promise(resolve => setTimeout(resolve, 1000));
+                      // 构建结构化文本（IndexTTS2 Pro 格式）
+                      const isDialogue = voice.script.includes('「') && voice.script.includes('」');
+                      let structuredText = voice.script;
+                      if (isDialogue) {
+                        // 转换「」格式为 <Character1> 格式
+                        structuredText = voice.script
+                          .replace(/「/g, '<Character1>')
+                          .replace(/」/g, '</Character1>');
+                      } else {
+                        structuredText = `<Narrator>${voice.script}</Narrator>`;
+                      }
+
+                      const result = await callComfyUITTS(
+                        structuredText,
+                        narratorAudio,
+                        narratorAudio,
+                        voice.emotion || '无'
+                      );
 
                       const newVoices = generatingVoices.map((v, idx) =>
-                        idx === i ? { ...v, status: 'completed' as Voice['status'], duration: 3 } : v
+                        idx === i ? { ...v, status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl } : v
                       );
                       dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: newVoices } });
                     } catch (e: any) {
@@ -1548,7 +1569,7 @@ ${scriptList}
                   }
 
                   showToast('配音生成完成', 'success');
-                }}
+                }
                 className="btn btn-primary"
                 disabled={!state.config.basic.comfyuiVoiceUrl}
               >
@@ -1713,32 +1734,30 @@ ${scriptList}
                             try {
                               // 查找音色对应的参考音频
                               const timbre = project.voiceTimbres?.find(t => t.name === voice.timbre);
-                              const referenceAudio = timbre?.referenceAudio;
+                              const audioFileName = timbre?.referenceAudio?.split('/').pop() || '';
 
-                              // 构建请求参数（发送给 ComfyUI）
-                              const payload: any = {
-                                script: voice.script,
-                                emotion: voice.emotion || '无',
-                                timbre: voice.timbre || '无',
-                              };
-                              if (referenceAudio) {
-                                payload.referenceAudio = referenceAudio;
+                              // 构建结构化文本（IndexTTS2 Pro 格式）
+                              const isDialogue = voice.script.includes('「') && voice.script.includes('」');
+                              let structuredText = voice.script;
+                              if (isDialogue) {
+                                structuredText = voice.script
+                                  .replace(/「/g, '<Character1>')
+                                  .replace(/」/g, '</Character1>');
+                              } else {
+                                structuredText = `<Narrator>${voice.script}</Narrator>`;
                               }
 
-                              // TODO: 实际调用 ComfyUI API
-                              // const response = await fetch(`${comfyuiUrl}/api/generate-voice`, {
-                              //   method: 'POST',
-                              //   headers: { 'Content-Type': 'application/json' },
-                              //   body: JSON.stringify(payload)
-                              // });
-                              // const result = await response.json();
-
-                              // 模拟生成
-                              await new Promise(resolve => setTimeout(resolve, 1500));
+                              // 调用 ComfyUI IndexTTS2
+                              const result = await callComfyUITTS(
+                                structuredText,
+                                audioFileName,
+                                audioFileName,
+                                voice.emotion || '无'
+                              );
 
                               // 更新状态为完成
                               const finalVoices = project.voiceDubbings.map(v =>
-                                v.id === voice.id ? { ...v, status: 'completed' as Voice['status'], duration: 5 } : v
+                                v.id === voice.id ? { ...v, status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl } : v
                               );
                               dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: finalVoices } });
                               showToast('配音生成完成', 'success');

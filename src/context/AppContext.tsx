@@ -969,6 +969,113 @@ export function AppProvider({ children }: AppProviderProps) {
     };
   };
 
+  // 调用 ComfyUI IndexTTS2 Pro 生成配音
+  const callComfyUITTS = async (
+    structuredText: string,
+    narratorAudio?: string,  // 旁白参考音频文件名
+    characterAudio?: string,  // 角色参考音频文件名
+    emotion?: string
+  ): Promise<{ audioUrl: string; duration: number }> => {
+    const comfyuiUrl = state.config.basic.comfyuiVoiceUrl?.replace(/\/$/, '') || 'http://127.0.0.1:8188';
+    const seed = Math.floor(Math.random() * 9999999999);
+
+    // 构建 IndexTTS2ProNode 的输入
+    const ttsNodeInputs: any = {
+      structured_text: structuredText,
+      mode: "Auto",
+      emotion_weight: 0.8,
+      do_sample_mode: "on",
+      temperature: 0.8,
+      top_p: 0.9,
+      top_k: 30,
+      num_beams: 3,
+      repetition_penalty: 10,
+      length_penalty: 0,
+      max_mel_tokens: 1815,
+      max_tokens_per_sentence: 120,
+      seed: seed,
+    };
+
+    // 如果有情绪描述
+    if (emotion && emotion !== '无') {
+      ttsNodeInputs.emotion_description = emotion;
+    }
+
+    // 构建完整的 workflow
+    const workflow: any = {
+      "3": {  // LoadAudio for narrator
+        "inputs": {
+          "audio": narratorAudio || "",
+          "audioUI": narratorAudio ? `/api/view?filename=${encodeURIComponent(narratorAudio)}&type=input&subfolder=&rand=${Math.random()}` : ""
+        },
+        "class_type": "LoadAudio"
+      },
+      "4": {  // LoadAudio for character
+        "inputs": {
+          "audio": characterAudio || narratorAudio || "",
+          "audioUI": (characterAudio || narratorAudio) ? `/api/view?filename=${encodeURIComponent(characterAudio || narratorAudio)}&type=input&subfolder=&rand=${Math.random()}` : ""
+        },
+        "class_type": "LoadAudio"
+      },
+      "5": {  // IndexTTS2ProNode
+        "inputs": {
+          ...ttsNodeInputs,
+          "narrator_audio": ["3", 0],
+          "character1_audio": ["4", 0]
+        },
+        "class_type": "IndexTTS2ProNode"
+      },
+      "6": {  // SaveAudio
+        "inputs": {
+          "filename_prefix": "anime-studio-tts",
+          "audio": ["5", 0]
+        },
+        "class_type": "SaveAudio"
+      }
+    };
+
+    // 提交到 ComfyUI
+    const response = await fetch(`${comfyuiUrl}/api/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: workflow })
+    });
+
+    if (!response.ok) {
+      throw new Error(`ComfyUI 请求失败: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const promptId = data.prompt_id;
+
+    // 轮询等待完成
+    let attempts = 0;
+    const maxAttempts = 120; // 最多等2分钟
+    while (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      const historyRes = await fetch(`${comfyuiUrl}/api/history/${promptId}`);
+      if (historyRes.ok) {
+        const history = await historyRes.json();
+        if (history[promptId]) {
+          const outputs = history[promptId].outputs;
+          // 找到 SaveAudio 节点的输出
+          for (const nodeId in outputs) {
+            if (outputs[nodeId].audio) {
+              const audioPath = outputs[nodeId].audio;
+              // 转换为本机可访问的URL
+              const audioUrl = `${comfyuiUrl}/api/view?filename=${encodeURIComponent(audioPath)}&type=output&subfolder=audio`;
+              return { audioUrl, duration: 0 }; // duration 后续计算
+            }
+          }
+        }
+      }
+      attempts++;
+    }
+
+    throw new Error('TTS 生成超时');
+  };
+
   // 项目变化时自动保存
   useEffect(() => {
     if (state.projects.length > 0) {
@@ -990,7 +1097,7 @@ export function AppProvider({ children }: AppProviderProps) {
     <AppContext.Provider value={{
       state, dispatch, showToast, saveConfig, loadConfig, resetConfig,
       getCurrentProject, getSelectedShot, callChatAPI, callAnalyzeAPI, callImageAPI, callPaidImageAPI,
-      callVideoAPI, callPaidVideoAPI, queryVideoStatus, queryPaidVideoStatus,
+      callVideoAPI, callPaidVideoAPI, queryVideoStatus, queryPaidVideoStatus, callComfyUITTS,
       getImageGenStatus, clearImageGenStatus
     }}>
       {children}
