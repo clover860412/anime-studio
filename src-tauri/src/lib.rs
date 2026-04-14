@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -57,8 +57,14 @@ async fn copy_file_to_path(dest_path: String, file_name: String, content_base64:
     // Decode base64 content
     let content = base64_decode(&content_base64).map_err(|e| format!("Base64解码失败: {}", e))?;
     
-    // Create destination directory if not exists
-    let full_path = Path::new(&dest_path);
+    // Normalize path: convert forward slashes to backslashes for Windows
+    let normalized_path = dest_path.replace("/", "\\");
+    
+    // Build full path
+    let mut full_path = PathBuf::from(&normalized_path);
+    full_path = full_path.join(&file_name);
+    
+    // Create parent directory if not exists
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
@@ -66,7 +72,7 @@ async fn copy_file_to_path(dest_path: String, file_name: String, content_base64:
     // Write file
     fs::write(&full_path, content).map_err(|e| format!("写入文件失败: {}", e))?;
     
-    Ok(format!("文件已保存到: {}\\{}", dest_path, file_name))
+    Ok(format!("文件已保存到: {:?}", full_path))
 }
 
 fn base64_decode(input: &str) -> Result<Vec<u8>, String> {

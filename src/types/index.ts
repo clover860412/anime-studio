@@ -152,7 +152,7 @@ export const defaultConfig: AppConfig = {
     projectDir: '',
     capcutDir: '',
     comfyuiVoiceUrl: '',
-    comfyuiPath: 'D:\\ComfyUI-aki-v3\\ComfyUI',
+    comfyuiPath: 'D:/ComfyUI-aki-v3/ComfyUI',
     comfyuiVideoUrl: '',
     comfyuiImageUrl: '',
     // 分析模型

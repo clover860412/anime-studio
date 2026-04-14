@@ -1322,7 +1322,7 @@ const handleSaveRewritten = () => {
                             const comfyuiPath = state.config.basic.comfyuiPath || 'D:\\\\ComfyUI-aki-v3\\\\ComfyUI';
                             try {
                               await (window as any).__TAURI__.core.invoke('copy_file_to_path', {
-                                destPath: `${comfyuiPath}\\input`,
+                                destPath: `${comfyuiPath}/input`,
                                 fileName: fileName,
                                 contentBase64: base64Content
                               });
@@ -1374,7 +1374,7 @@ const handleSaveRewritten = () => {
                             const comfyuiPath = state.config.basic.comfyuiPath || 'D:\\\\ComfyUI-aki-v3\\\\ComfyUI';
                             try {
                               await (window as any).__TAURI__.core.invoke('copy_file_to_path', {
-                                destPath: `${comfyuiPath}\\\\input`,
+                                destPath: `${comfyuiPath}/input`,
                                 fileName: fileName,
                                 contentBase64: base64Content
                               });
