@@ -1063,10 +1063,12 @@ export function AppProvider({ children }: AppProviderProps) {
           const outputs = history[promptId].outputs;
           // 找到 SaveAudio 节点的输出
           for (const nodeId in outputs) {
-            if (outputs[nodeId].audio) {
-              const audioPath = outputs[nodeId].audio;
+            if (outputs[nodeId].audio && Array.isArray(outputs[nodeId].audio)) {
+              const audioInfo = outputs[nodeId].audio[0];
+              const filename = audioInfo.filename;
+              const subfolder = audioInfo.subfolder || 'audio';
               // 转换为本机可访问的URL
-              const audioUrl = `${comfyuiUrl}/api/view?filename=${encodeURIComponent(audioPath)}&type=output&subfolder=audio`;
+              const audioUrl = `${comfyuiUrl}/api/view?filename=${encodeURIComponent(filename)}&type=output&subfolder=${subfolder}`;
               return { audioUrl, duration: 0 }; // duration 后续计算
             }
           }
