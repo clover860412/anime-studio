@@ -1561,8 +1561,10 @@ ${scriptList}
                       );
                       dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: newVoices } });
                     } catch (e: any) {
+                      const errorMsg = e?.message || String(e) || '未知错误';
+                      console.error('[TTS] 错误:', errorMsg);
                       const newVoices = generatingVoices.map((v, idx) =>
-                        idx === i ? { ...v, status: 'failed' as Voice['status'], error: String(e.message) } : v
+                        idx === i ? { ...v, status: 'failed' as Voice['status'], error: errorMsg } : v
                       );
                       dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: newVoices } });
                     }
@@ -1762,11 +1764,13 @@ ${scriptList}
                               dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: finalVoices } });
                               showToast('配音生成完成', 'success');
                             } catch (e: any) {
+                              const errorMsg = e?.message || String(e) || '未知错误';
+                              console.error('[TTS] 错误:', errorMsg);
                               const failedVoices = project.voiceDubbings.map(v =>
-                                v.id === voice.id ? { ...v, status: 'failed' as Voice['status'], error: e.message } : v
+                                v.id === voice.id ? { ...v, status: 'failed' as Voice['status'], error: errorMsg } : v
                               );
                               dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: failedVoices } });
-                              showToast('生成失败：' + e.message, 'error');
+                              showToast('生成失败: ' + errorMsg.substring(0, 100), 'error');
                             }
                           }}
                           className="btn btn-secondary text-xs px-2 py-1"
