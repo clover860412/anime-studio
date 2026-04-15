@@ -1076,10 +1076,11 @@ export function AppProvider({ children }: AppProviderProps) {
     // narrator audio
     workflow["load_narrator"] = { 
       "inputs": { 
-        "audio": narratorAudio || "", 
-        "audioUI": narratorAudio ? `/api/view?filename=${encodeURIComponent(narratorAudio || '')}&type=input&subfolder=&rand=${Math.random()}` : "" 
+        "audio_file": "input/",
+        "seek_seconds": 0,
+        "duration": 0
       }, 
-      "class_type": "LoadAudio" 
+      "class_type": "VHS_LoadAudio" 
     };
 
     // character audios (只创建实际需要的)
@@ -1089,10 +1090,11 @@ export function AppProvider({ children }: AppProviderProps) {
       const audioFile = characterAudios?.[charName] || narratorAudio || '';
       workflow[nodeId] = { 
         "inputs": { 
-          "audio": audioFile, 
-          "audioUI": audioFile ? `/api/view?filename=${encodeURIComponent(audioFile)}&type=input&subfolder=&rand=${Math.random()}` : "" 
+          "audio_file": "input/",
+          "seek_seconds": 0,
+          "duration": 0
         }, 
-        "class_type": "LoadAudio" 
+        "class_type": "VHS_LoadAudio" 
       };
       characterNodeIds[charName] = nodeId;
     });
@@ -1101,10 +1103,11 @@ export function AppProvider({ children }: AppProviderProps) {
     if (emotionAudio) {
       workflow["load_emotion"] = { 
         "inputs": { 
-          "audio": emotionAudio, 
-          "audioUI": `/api/view?filename=${encodeURIComponent(emotionAudio)}&type=input&subfolder=&rand=${Math.random()}` 
+          "audio_file": "input/",
+          "seek_seconds": 0,
+          "duration": 0
         }, 
-        "class_type": "LoadAudio" 
+        "class_type": "VHS_LoadAudio" 
       };
     }
 
@@ -1249,17 +1252,19 @@ export function AppProvider({ children }: AppProviderProps) {
     const workflow: any = {
       "load_narrator": { 
         "inputs": { 
-          "audio": narratorAudio || "", 
-          "audioUI": narratorAudio ? `/api/view?filename=${encodeURIComponent(narratorAudio || '')}&type=input&subfolder=&rand=${Math.random()}` : "" 
+          "audio_file": "input/",
+          "seek_seconds": 0,
+          "duration": 0
         }, 
-        "class_type": "LoadAudio" 
+        "class_type": "VHS_LoadAudio" 
       },
       "load_character1": { 
         "inputs": { 
-          "audio": characterAudio || narratorAudio || "", 
-          "audioUI": (characterAudio || narratorAudio) ? `/api/view?filename=${encodeURIComponent((characterAudio || narratorAudio) || '')}&type=input&subfolder=&rand=${Math.random()}` : "" 
+          "audio_file": "input/",
+          "seek_seconds": 0,
+          "duration": 0
         }, 
-        "class_type": "LoadAudio" 
+        "class_type": "VHS_LoadAudio" 
       }
     };
     
@@ -1267,10 +1272,11 @@ export function AppProvider({ children }: AppProviderProps) {
     if (emotionAudio) {
       workflow["load_emotion"] = { 
         "inputs": { 
-          "audio": emotionAudio, 
-          "audioUI": `/api/view?filename=${encodeURIComponent(emotionAudio)}&type=input&subfolder=&rand=${Math.random()}` 
+          "audio_file": "input/",
+          "seek_seconds": 0,
+          "duration": 0
         }, 
-        "class_type": "LoadAudio" 
+        "class_type": "VHS_LoadAudio" 
       };
       workflow["index_tts2_pro"] = { 
         "inputs": { 
