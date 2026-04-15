@@ -1044,8 +1044,8 @@ export function AppProvider({ children }: AppProviderProps) {
   // 调用 ComfyUI IndexTTS2 Pro 生成配音（支持多角色）
   const callComfyUITTSMultiCharacter = async (
     script: string,
-    narratorAudio?: string,
-    characterAudios?: Record<string, string>, // { "角色名": "音频文件名" }
+    _narratorAudio?: string,
+    _characterAudios?: Record<string, string>, // { "角色名": "音频文件名" }
     emotion?: string,
     emotionAudio?: string
   ): Promise<{ audioUrl: string; duration: number }> => {
@@ -1087,7 +1087,6 @@ export function AppProvider({ children }: AppProviderProps) {
     const characterNodeIds: Record<string, string> = {};
     characters.slice(0, 5).forEach((charName, index) => {
       const nodeId = `load_character${index + 1}`;
-      const audioFile = characterAudios?.[charName] || narratorAudio || '';
       workflow[nodeId] = { 
         "inputs": { 
           "audio_file": "input/",
@@ -1218,8 +1217,8 @@ export function AppProvider({ children }: AppProviderProps) {
   // 旧版单角色TTS（保留兼容）
   const callComfyUITTS = async (
     structuredText: string,
-    narratorAudio?: string,
-    characterAudio?: string,
+    _narratorAudio?: string,
+    _characterAudio?: string,
     emotion?: string,
     emotionAudio?: string
   ): Promise<{ audioUrl: string; duration: number }> => {
