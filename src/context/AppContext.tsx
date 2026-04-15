@@ -1070,7 +1070,46 @@ export function AppProvider({ children }: AppProviderProps) {
     const structuredText = convertToIndexTTSFormat(parts, characterMapping);
     console.log('[TTS] 转换后文本:', structuredText);
 
-    const ttsNodeInputs: any = {
+    // 构建workflow节点（使用字符串节点ID，与ComfyUI导出一致）
+    const workflow: any = {};
+
+    // narrator audio
+    workflow["load_narrator"] = { 
+      "inputs": { 
+        "audio": narratorAudio || "", 
+        "audioUI": narratorAudio ? `/api/view?filename=${encodeURIComponent(narratorAudio || '')}&type=input&subfolder=&rand=${Math.random()}` : "" 
+      }, 
+      "class_type": "LoadAudio" 
+    };
+
+    // character audios (只创建实际需要的)
+    const characterNodeIds: Record<string, string> = {};
+    characters.slice(0, 5).forEach((charName, index) => {
+      const nodeId = `load_character${index + 1}`;
+      const audioFile = characterAudios?.[charName] || narratorAudio || '';
+      workflow[nodeId] = { 
+        "inputs": { 
+          "audio": audioFile, 
+          "audioUI": audioFile ? `/api/view?filename=${encodeURIComponent(audioFile)}&type=input&subfolder=&rand=${Math.random()}` : "" 
+        }, 
+        "class_type": "LoadAudio" 
+      };
+      characterNodeIds[charName] = nodeId;
+    });
+
+    // emotion audio (可选)
+    if (emotionAudio) {
+      workflow["load_emotion"] = { 
+        "inputs": { 
+          "audio": emotionAudio, 
+          "audioUI": `/api/view?filename=${encodeURIComponent(emotionAudio)}&type=input&subfolder=&rand=${Math.random()}` 
+        }, 
+        "class_type": "LoadAudio" 
+      };
+    }
+
+    // IndexTTS2ProNode
+    const ttsInputs: any = {
       structured_text: structuredText,
       mode: "Auto",
       emotion_weight: 0.8,
@@ -1084,84 +1123,34 @@ export function AppProvider({ children }: AppProviderProps) {
       max_mel_tokens: 1815,
       max_tokens_per_sentence: 120,
       seed: seed,
+      narrator_audio: ["load_narrator", 0],
     };
 
     if (emotion && emotion !== '无') {
-      ttsNodeInputs.emotion_description = emotion;
+      ttsInputs.emotion_description = emotion;
     }
-
-    // 构建workflow节点
-    const workflow: any = {};
-    let nodeIndex = 3;
-
-    // narrator audio
-    workflow[String(nodeIndex)] = { 
-      "inputs": { 
-        "audio": narratorAudio || "", 
-        "audioUI": narratorAudio ? `/api/view?filename=${encodeURIComponent(narratorAudio || '')}&type=input&subfolder=&rand=${Math.random()}` : "" 
-      }, 
-      "class_type": "LoadAudio" 
-    };
-    const narratorNodeId = String(nodeIndex);
-    nodeIndex++;
-
-    // character audios (最多5个)
-    const characterNodeIds: Record<string, string> = {};
-    for (const charName of characters.slice(0, 5)) {
-      const audioFile = characterAudios?.[charName] || narratorAudio || '';
-      workflow[String(nodeIndex)] = { 
-        "inputs": { 
-          "audio": audioFile, 
-          "audioUI": audioFile ? `/api/view?filename=${encodeURIComponent(audioFile)}&type=input&subfolder=&rand=${Math.random()}` : "" 
-        }, 
-        "class_type": "LoadAudio" 
-      };
-      characterNodeIds[charName] = String(nodeIndex);
-      nodeIndex++;
-    }
-
-    // emotion audio (可选)
-    let emotionNodeId: string | null = null;
-    if (emotionAudio) {
-      workflow[String(nodeIndex)] = { 
-        "inputs": { 
-          "audio": emotionAudio, 
-          "audioUI": `/api/view?filename=${encodeURIComponent(emotionAudio)}&type=input&subfolder=&rand=${Math.random()}` 
-        }, 
-        "class_type": "LoadAudio" 
-      };
-      emotionNodeId = String(nodeIndex);
-      nodeIndex++;
-    }
-
-    // IndexTTS2ProNode
-    const ttsNodeId = String(nodeIndex);
-    nodeIndex++;
-
-    // 构建TTS节点输入
-    const ttsInputs: any = { ...ttsNodeInputs };
-    ttsInputs.narrator_audio = [narratorNodeId, 0];
 
     // 连接角色音频
-    for (const charName of characters.slice(0, 5)) {
-      const charIndex = characters.indexOf(charName);
-      ttsInputs[`character${charIndex + 1}_audio`] = [characterNodeIds[charName], 0];
-    }
+    characters.slice(0, 5).forEach((charName, index) => {
+      ttsInputs[`character${index + 1}_audio`] = [characterNodeIds[charName], 0];
+    });
 
     // 连接情绪音频
-    if (emotionNodeId) {
-      ttsInputs.emo_ref_audio = [emotionNodeId, 0];
+    if (emotionAudio) {
+      ttsInputs.emo_ref_audio = ["load_emotion", 0];
     }
 
-    workflow[ttsNodeId] = { 
+    workflow["index_tts2_pro"] = { 
       "inputs": ttsInputs, 
       "class_type": "IndexTTS2ProNode" 
     };
 
     // SaveAudio节点
-    const saveNodeId = String(nodeIndex);
-    workflow[saveNodeId] = { 
-      "inputs": { "filename_prefix": "anime-studio-tts-multi", "audio": [ttsNodeId, 0] }, 
+    workflow["save_audio"] = { 
+      "inputs": { 
+        "filename_prefix": "audio/ComfyUI", 
+        "audio": ["index_tts2_pro", 0]
+      }, 
       "class_type": "SaveAudio" 
     };
 
