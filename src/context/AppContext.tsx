@@ -1266,13 +1266,10 @@ export function AppProvider({ children }: AppProviderProps) {
     if (emotionAudio) {
       workflow["5"] = { "inputs": { "audio": emotionAudio, "audioUI": `/api/view?filename=${encodeURIComponent(emotionAudio)}&type=input&subfolder=&rand=${Math.random()}` }, "class_type": "LoadAudio" };
       workflow["6"] = { "inputs": { ...ttsNodeInputs, "narrator_audio": ["3", 0], "character1_audio": ["4", 0], "emo_ref_audio": ["5", 0] }, "class_type": "IndexTTS2ProNode" };
+      workflow["7"] = { "inputs": { "filename_prefix": "anime-studio-tts", "audio": ["6", 0] }, "class_type": "SaveAudio" };
     } else {
       workflow["5"] = { "inputs": { ...ttsNodeInputs, "narrator_audio": ["3", 0], "character1_audio": ["4", 0] }, "class_type": "IndexTTS2ProNode" };
-    }
-    
-    workflow["6"] = workflow["6"] || { "inputs": { "filename_prefix": "anime-studio-tts", "audio": ["6", 0] }, "class_type": "SaveAudio" };
-    if (!emotionAudio) {
-      workflow["7"] = { "inputs": { "filename_prefix": "anime-studio-tts", "audio": ["6", 0] }, "class_type": "SaveAudio" };
+      workflow["6"] = { "inputs": { "filename_prefix": "anime-studio-tts", "audio": ["5", 0] }, "class_type": "SaveAudio" };
     }
 
     const promptId = `tts_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
