@@ -1044,8 +1044,8 @@ export function AppProvider({ children }: AppProviderProps) {
   // 调用 ComfyUI IndexTTS2 Pro 生成配音（支持多角色）
   const callComfyUITTSMultiCharacter = async (
     script: string,
-    _narratorAudio?: string,
-    _characterAudios?: Record<string, string>, // { "角色名": "音频文件名" }
+    narratorAudio?: string,
+    characterAudios?: Record<string, string>, // { "角色名": "音频文件名" }
     emotion?: string,
     emotionAudio?: string
   ): Promise<{ audioUrl: string; duration: number }> => {
@@ -1054,6 +1054,8 @@ export function AppProvider({ children }: AppProviderProps) {
     console.log('[TTS] 开始生成多角色配音');
     console.log('[TTS] ComfyUI地址:', comfyuiUrl);
     console.log('[TTS] 原始脚本:', script);
+    console.log('[TTS] 旁白音频:', narratorAudio);
+    console.log('[TTS] 角色音频:', characterAudios);
 
     // 解析脚本
     const { parts, characters } = parseMultiCharacterScript(script);
@@ -1073,10 +1075,11 @@ export function AppProvider({ children }: AppProviderProps) {
     // 构建workflow节点（使用字符串节点ID，与ComfyUI导出一致）
     const workflow: any = {};
 
-    // narrator audio
+    // narrator audio（使用实际文件名，如果没有则为空字符串）
+    const narratorFile = narratorAudio ? `input/${narratorAudio}` : '';
     workflow["load_narrator"] = { 
       "inputs": { 
-        "audio_file": "input/",
+        "audio_file": narratorFile,
         "seek_seconds": 0,
         "duration": 0
       }, 
@@ -1087,9 +1090,10 @@ export function AppProvider({ children }: AppProviderProps) {
     const characterNodeIds: Record<string, string> = {};
     characters.slice(0, 5).forEach((charName, index) => {
       const nodeId = `load_character${index + 1}`;
+      const charAudioFile = characterAudios?.[charName] ? `input/${characterAudios[charName]}` : '';
       workflow[nodeId] = { 
         "inputs": { 
-          "audio_file": "input/",
+          "audio_file": charAudioFile,
           "seek_seconds": 0,
           "duration": 0
         }, 
@@ -1102,7 +1106,7 @@ export function AppProvider({ children }: AppProviderProps) {
     if (emotionAudio) {
       workflow["load_emotion"] = { 
         "inputs": { 
-          "audio_file": "input/",
+          "audio_file": `input/${emotionAudio}`,
           "seek_seconds": 0,
           "duration": 0
         }, 
@@ -1217,8 +1221,8 @@ export function AppProvider({ children }: AppProviderProps) {
   // 旧版单角色TTS（保留兼容）
   const callComfyUITTS = async (
     structuredText: string,
-    _narratorAudio?: string,
-    _characterAudio?: string,
+    narratorAudio?: string,
+    characterAudio?: string,
     emotion?: string,
     emotionAudio?: string
   ): Promise<{ audioUrl: string; duration: number }> => {
@@ -1226,6 +1230,8 @@ export function AppProvider({ children }: AppProviderProps) {
     const seed = Math.floor(Math.random() * 4294967295);
     console.log('[TTS] 开始生成配音');
     console.log('[TTS] ComfyUI地址:', comfyuiUrl);
+    console.log('[TTS] 旁白音频:', narratorAudio);
+    console.log('[TTS] 角色音频:', characterAudio);
 
     const ttsNodeInputs: any = {
       structured_text: structuredText,
@@ -1247,11 +1253,15 @@ export function AppProvider({ children }: AppProviderProps) {
       ttsNodeInputs.emotion_description = emotion;
     }
 
+    // narrator audio（使用实际文件名，如果没有则为空字符串）
+    const narratorFile = narratorAudio ? `input/${narratorAudio}` : '';
+    const charFile = characterAudio ? `input/${characterAudio}` : '';
+
     // 构建workflow节点（使用字符串节点ID，与ComfyUI导出一致）
     const workflow: any = {
       "load_narrator": { 
         "inputs": { 
-          "audio_file": "input/",
+          "audio_file": narratorFile,
           "seek_seconds": 0,
           "duration": 0
         }, 
@@ -1259,7 +1269,7 @@ export function AppProvider({ children }: AppProviderProps) {
       },
       "load_character1": { 
         "inputs": { 
-          "audio_file": "input/",
+          "audio_file": charFile,
           "seek_seconds": 0,
           "duration": 0
         }, 
@@ -1271,7 +1281,7 @@ export function AppProvider({ children }: AppProviderProps) {
     if (emotionAudio) {
       workflow["load_emotion"] = { 
         "inputs": { 
-          "audio_file": "input/",
+          "audio_file": `input/${emotionAudio}`,
           "seek_seconds": 0,
           "duration": 0
         }, 
