@@ -1097,14 +1097,17 @@ export function AppProvider({ children }: AppProviderProps) {
   ): Promise<{ audioUrl: string; duration: number }> => {
     const comfyuiUrl = state.config.basic.comfyuiVoiceUrl?.replace(/\/$/, '') || 'http://127.0.0.1:8188';
 
-    // 检查ComfyUI服务器上input目录的文件是否存在（LoadAudio需要有效audio输入）
+    // 检查ComfyUI服务器上input目录的文件是否存在
+    // 使用Tauri后端发起请求，避免浏览器CORS限制；404视为文件不存在
     const checkComfyUIFileExists = async (filename: string): Promise<boolean> => {
       try {
         await (window as any).__TAURI__.core.invoke('comfyui_get', {
           url: `${comfyuiUrl}/api/view?filename=${encodeURIComponent(filename)}&type=input`
         });
         return true;
-      } catch {
+      } catch (e: any) {
+        // 404或其他错误都视为文件不存在，Tauri后端统一处理CORS
+        console.log('[TTS] 音频文件不存在或无法访问:', filename, e?.message || e);
         return false;
       }
     };

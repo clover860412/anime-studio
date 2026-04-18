@@ -41,10 +41,15 @@ async fn comfyui_get(url: String) -> Result<String, String> {
         .send()
         .await
         .map_err(|e| format!("请求失败: {}", e))?;
-    
+
     let status = response.status();
     let body = response.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
-    
+
+    // 文件不存在时返回特殊标记，前端据此判断文件是否存在
+    if status.as_u16() == 404 {
+        return Err("FILE_NOT_FOUND".to_string());
+    }
+
     if status.is_success() {
         Ok(body)
     } else {
