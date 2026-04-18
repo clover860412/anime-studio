@@ -976,45 +976,79 @@ export function AppProvider({ children }: AppProviderProps) {
   // 解析多角色文案格式
   // 输入格式: "他边走边说："今天天气真好呀！"#小明"
   // 输出格式: { parts: [{type: 'narration'|'dialogue', content: string, character?: string}], characters: string[] }
+  // 解析多角色文案格式（支持多种引号风格）
+  // 输入格式: 旁白内容"对话"#角色名 或者 旁白内容"对话"
+  // 兼容引号: " " " " ' ' 以及中文「」(作为旁白包裹)
   const parseMultiCharacterScript = (script: string): { parts: { type: 'narration' | 'dialogue'; content: string; character?: string }[]; characters: string[] } => {
     const parts: { type: 'narration' | 'dialogue'; content: string; character?: string }[] = [];
     const characters = new Set<string>();
     
-    // 正则匹配: 旁白内容:"对话"#角色名  或者  旁白内容:"对话"
-    // 模式: (旁白内容):(对话内容)#(角色名)
-    const regex = /([^"：:。；？\n]*)["""]([^""]+)["""]#(\S+)|([^"：:。；？\n]*)["""]([^""]+)["""]/g;
+    // 匹配模式：
+    // 组1/4: 旁白内容（不含引号的文字）  
+    // 组2/5: 对话内容（引号内的文字）
+    // 组3:   角色名（#后面的内容）
+    // 支持所有中文/英文引号："" "" '' 「」
+    const regex = /([^"""::。；？\n【】\[\]]*)([""""''「]([^""#\n]+)[》""])#(\S+)|([^""::。；？\n【】\[\]]*)(["""])([^""#\n]+)["""|"]|([^""::。；？\n【】\[\]]*?)【([^#】]+)】/g;
     let lastIndex = 0;
     let match;
+    let hasAnyMatch = false;
     
     while ((match = regex.exec(script)) !== null) {
-      // 旁白部分
-      const narrationPart = match[1] || match[4] || '';
-      const dialoguePart = match[2] || match[5] || '';
-      const characterName = match[3] || '';
-      
-      // 如果有旁白
-      if (narrationPart.trim()) {
-        parts.push({ type: 'narration', content: narrationPart.trim() });
-      }
-      
-      // 对话部分
-      if (dialoguePart.trim()) {
-        if (characterName) {
+      hasAnyMatch = true;
+      // 分支1: "对话"#角色名（有角色标签）
+      if (match[3]) {
+        const narrationPart = (match[1] || '').trim();
+        const dialoguePart = (match[2] || '').trim();
+        const characterName = match[4];
+        if (narrationPart) {
+          parts.push({ type: 'narration', content: narrationPart });
+        }
+        if (dialoguePart) {
           characters.add(characterName);
-          parts.push({ type: 'dialogue', content: dialoguePart.trim(), character: characterName });
-        } else {
-          // 没有角色名，默认作为旁白
-          parts.push({ type: 'narration', content: dialoguePart.trim() });
+          parts.push({ type: 'dialogue', content: dialoguePart, character: characterName });
+        }
+      }
+      // 分支2: "对话"（无角色标签，作为旁白）
+      else if (match[6]) {
+        const narrationPart = (match[5] || '').trim();
+        const dialoguePart = (match[6] || '').trim();
+        if (narrationPart) {
+          parts.push({ type: 'narration', content: narrationPart });
+        }
+        if (dialoguePart) {
+          parts.push({ type: 'narration', content: dialoguePart });
+        }
+      }
+      // 分支3: 【旁白】（中文书名号包裹的旁白）
+      else if (match[8]) {
+        const narrationPart = (match[7] || '').trim();
+        const bracketPart = (match[8] || '').trim();
+        if (narrationPart) {
+          parts.push({ type: 'narration', content: narrationPart });
+        }
+        if (bracketPart) {
+          parts.push({ type: 'narration', content: bracketPart });
         }
       }
       
       lastIndex = regex.lastIndex;
     }
     
+    // 如果没有任何匹配，尝试直接把整段当做旁白（处理纯旁白无引号的情况）
+    if (!hasAnyMatch) {
+      const trimmed = script.trim();
+      if (trimmed) {
+        parts.push({ type: 'narration', content: trimmed });
+      }
+      return { parts, characters: Array.from(characters) };
+    }
+    
     // 处理剩余文本（没有匹配到的部分）
-    const remaining = script.slice(lastIndex).trim();
-    if (remaining) {
-      parts.push({ type: 'narration', content: remaining });
+    if (lastIndex < script.length) {
+      const remaining = script.slice(lastIndex).trim();
+      if (remaining && remaining.length > 0) {
+        parts.push({ type: 'narration', content: remaining });
+      }
     }
     
     return { parts, characters: Array.from(characters) };
@@ -1075,29 +1109,22 @@ export function AppProvider({ children }: AppProviderProps) {
     // 构建workflow节点（使用字符串节点ID，与ComfyUI导出一致）
     const workflow: any = {};
 
-    // narrator audio（使用实际文件名，如果没有则为空字符串）
+    // narrator audio（使用 LoadAudio 而非 VHS_LoadAudio，避免空路径崩溃）
+    // LoadAudio 节点在没有 audio_file 时会使用空白音频，比 VHS_LoadAudio 更稳定
     const narratorFile = narratorAudio ? `input/${narratorAudio}` : '';
     workflow["load_narrator"] = { 
-      "inputs": { 
-        "audio_file": narratorFile,
-        "seek_seconds": 0,
-        "duration": 0
-      }, 
-      "class_type": "VHS_LoadAudio" 
+      "inputs": narratorFile ? { "audio_file": narratorFile } : {},
+      "class_type": "LoadAudio"
     };
 
-    // character audios (只创建实际需要的)
+    // character audios (只创建实际需要的，只在有参考音频文件时才创建)
     const characterNodeIds: Record<string, string> = {};
     characters.slice(0, 5).forEach((charName, index) => {
       const nodeId = `load_character${index + 1}`;
       const charAudioFile = characterAudios?.[charName] ? `input/${characterAudios[charName]}` : '';
       workflow[nodeId] = { 
-        "inputs": { 
-          "audio_file": charAudioFile,
-          "seek_seconds": 0,
-          "duration": 0
-        }, 
-        "class_type": "VHS_LoadAudio" 
+        "inputs": charAudioFile ? { "audio_file": charAudioFile } : {},
+        "class_type": "LoadAudio"
       };
       characterNodeIds[charName] = nodeId;
     });
@@ -1105,12 +1132,8 @@ export function AppProvider({ children }: AppProviderProps) {
     // emotion audio (可选)
     if (emotionAudio) {
       workflow["load_emotion"] = { 
-        "inputs": { 
-          "audio_file": `input/${emotionAudio}`,
-          "seek_seconds": 0,
-          "duration": 0
-        }, 
-        "class_type": "VHS_LoadAudio" 
+        "inputs": { "audio_file": `input/${emotionAudio}` },
+        "class_type": "LoadAudio"
       };
     }
 
@@ -1253,39 +1276,28 @@ export function AppProvider({ children }: AppProviderProps) {
       ttsNodeInputs.emotion_description = emotion;
     }
 
-    // narrator audio（使用实际文件名，如果没有则为空字符串）
+    // narrator audio（使用 LoadAudio 而非 VHS_LoadAudio，避免空路径崩溃）
+    // 关键修复：不要传空字符串，只在有音频文件时才传 audio_file 参数
     const narratorFile = narratorAudio ? `input/${narratorAudio}` : '';
     const charFile = characterAudio ? `input/${characterAudio}` : '';
 
     // 构建workflow节点（使用字符串节点ID，与ComfyUI导出一致）
     const workflow: any = {
       "load_narrator": { 
-        "inputs": { 
-          "audio_file": narratorFile,
-          "seek_seconds": 0,
-          "duration": 0
-        }, 
-        "class_type": "VHS_LoadAudio" 
+        "inputs": narratorFile ? { "audio_file": narratorFile } : {},
+        "class_type": "LoadAudio"
       },
       "load_character1": { 
-        "inputs": { 
-          "audio_file": charFile,
-          "seek_seconds": 0,
-          "duration": 0
-        }, 
-        "class_type": "VHS_LoadAudio" 
+        "inputs": charFile ? { "audio_file": charFile } : {},
+        "class_type": "LoadAudio"
       }
     };
     
     // 如果有情绪参考音频，添加情绪LoadAudio节点
     if (emotionAudio) {
       workflow["load_emotion"] = { 
-        "inputs": { 
-          "audio_file": `input/${emotionAudio}`,
-          "seek_seconds": 0,
-          "duration": 0
-        }, 
-        "class_type": "VHS_LoadAudio" 
+        "inputs": { "audio_file": `input/${emotionAudio}` },
+        "class_type": "LoadAudio"
       };
       workflow["index_tts2_pro"] = { 
         "inputs": { 
