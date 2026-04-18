@@ -76,34 +76,11 @@ async fn copy_file_to_path(dest_path: String, file_name: String, content_base64:
 }
 
 fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    // Simple base64 decoder
-    const BASE64_TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    
-    let input = input.trim();
-    let mut output = Vec::new();
-    let mut buffer: u32 = 0;
-    let mut bits_collected = 0;
-    
-    for c in input.chars() {
-        if c == '=' || c.is_whitespace() {
-            continue;
-        }
-        
-        let value = match BASE64_TABLE.iter().position(|&x| x as char == c) {
-            Some(v) => v as u32,
-            None => return Err(format!("Invalid base64 character: {}", c)),
-        };
-        
-        buffer = (buffer << 6) | value;
-        bits_collected += 6;
-        
-        if bits_collected >= 8 {
-            bits_collected -= 8;
-            output.push((buffer >> bits_collected) as u8);
-        }
-    }
-    
-    Ok(output)
+    // 使用标准 base64 crate 解码（替代有 bug 的自定义实现）
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(input.trim())
+        .map_err(|e| format!("Base64 解码失败: {}", e))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -1055,12 +1055,24 @@ export function AppProvider({ children }: AppProviderProps) {
   };
 
   // 将解析后的parts转换为IndexTTS2 Pro格式
+  // 按句子拆分旁白（关键修复：纯旁白整段灌会导致 TTS 输出 "AAAAAAAA..."）
+  const splitNarrationBySentence = (text: string): string[] => {
+    // 按句子结束标点拆分：。！？……
+    const sentences = text.split(/(?<=[。！？……])/);
+    // 过滤空段落，并去除首尾空白
+    return sentences.map(s => s.trim()).filter(s => s.length > 0);
+  };
+
   const convertToIndexTTSFormat = (parts: { type: 'narration' | 'dialogue'; content: string; character?: string }[], characterMapping: Record<string, string>): string => {
     let result = '';
     
     for (const part of parts) {
       if (part.type === 'narration') {
-        result += `<Narrator>${part.content}`;
+        // 关键修复：按句子拆分 narration，避免整段灌入导致 TTS 模型输出异常
+        const sentences = splitNarrationBySentence(part.content);
+        for (const sentence of sentences) {
+          result += `<Narrator>${sentence}`;
+        }
       } else if (part.type === 'dialogue' && part.character) {
         const index = characterMapping[part.character];
         if (index) {
@@ -1282,50 +1294,55 @@ export function AppProvider({ children }: AppProviderProps) {
     const charFile = characterAudio ? `input/${characterAudio}` : '';
 
     // 构建workflow节点（使用字符串节点ID，与ComfyUI导出一致）
-    const workflow: any = {
-      "load_narrator": { 
-        "inputs": narratorFile ? { "audio_file": narratorFile } : {},
-        "class_type": "LoadAudio"
-      },
-      "load_character1": { 
-        "inputs": charFile ? { "audio_file": charFile } : {},
-        "class_type": "LoadAudio"
-      }
+    // 修复：如果 narratorFile 和 charFile 都为空，不要创建 LoadAudio 节点，
+    // 让 IndexTTS2ProNode 使用内置默认音色，避免空路径导致崩溃
+    const workflow: any = {};
+
+    if (narratorFile) {
+      workflow["load_narrator"] = { "inputs": { "audio_file": narratorFile }, "class_type": "LoadAudio" };
+    }
+    if (charFile) {
+      workflow["load_character1"] = { "inputs": { "audio_file": charFile }, "class_type": "LoadAudio" };
+    }
+
+    // 预构建 IndexTTS2ProNode inputs（后面根据是否有音频节点动态组装）
+    const ttsNodeInputsBase: any = {
+      structured_text: structuredText,
+      mode: "Auto",
+      emotion_weight: 0.8,
+      do_sample_mode: "on",
+      temperature: 0.8,
+      top_p: 0.9,
+      top_k: 30,
+      num_beams: 3,
+      repetition_penalty: 10,
+      length_penalty: 0,
+      max_mel_tokens: 1815,
+      max_tokens_per_sentence: 120,
+      seed: seed,
     };
     
     // 如果有情绪参考音频，添加情绪LoadAudio节点
+    // 组装 audio 引用（只在有音频文件时才引用 LoadAudio 节点，否则不传让 TTS 用默认音色）
+    const ttsNodeInputsWithAudio: any = { ...ttsNodeInputsBase };
+    if (narratorFile) ttsNodeInputsWithAudio.narrator_audio = ["load_narrator", 0];
+    if (charFile) ttsNodeInputsWithAudio.character1_audio = ["load_character1", 0];
     if (emotionAudio) {
-      workflow["load_emotion"] = { 
+      workflow["load_emotion"] = {
         "inputs": { "audio_file": `input/${emotionAudio}` },
         "class_type": "LoadAudio"
       };
-      workflow["index_tts2_pro"] = { 
-        "inputs": { 
-          ...ttsNodeInputs, 
-          "narrator_audio": ["load_narrator", 0], 
-          "character1_audio": ["load_character1", 0], 
-          "emo_ref_audio": ["load_emotion", 0] 
-        }, 
-        "class_type": "IndexTTS2ProNode" 
-      };
-      workflow["save_audio"] = { 
-        "inputs": { "filename_prefix": "audio/ComfyUI", "audio": ["index_tts2_pro", 0] }, 
-        "class_type": "SaveAudio" 
-      };
-    } else {
-      workflow["index_tts2_pro"] = { 
-        "inputs": { 
-          ...ttsNodeInputs, 
-          "narrator_audio": ["load_narrator", 0], 
-          "character1_audio": ["load_character1", 0] 
-        }, 
-        "class_type": "IndexTTS2ProNode" 
-      };
-      workflow["save_audio"] = { 
-        "inputs": { "filename_prefix": "audio/ComfyUI", "audio": ["index_tts2_pro", 0] }, 
-        "class_type": "SaveAudio" 
-      };
+      ttsNodeInputsWithAudio.emo_ref_audio = ["load_emotion", 0];
     }
+
+    workflow["index_tts2_pro"] = {
+      "inputs": ttsNodeInputsWithAudio,
+      "class_type": "IndexTTS2ProNode"
+    };
+    workflow["save_audio"] = {
+      "inputs": { "filename_prefix": "audio/ComfyUI", "audio": ["index_tts2_pro", 0] },
+      "class_type": "SaveAudio"
+    };
 
     const promptId = `tts_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const promptPayload = { prompt: workflow };

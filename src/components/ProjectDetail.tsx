@@ -1610,9 +1610,12 @@ ${scriptList}
                   const narratorAudio = timbre?.referenceAudio?.split('/').pop() || '';
                   const emotionAudio = timbre?.emotionAudio?.split('/').pop() || undefined;
 
-                  // 更新所有配音状态为生成中
-                  const generatingVoices = voices.map(v => ({ ...v, status: 'generating' as Voice['status'] }));
-                  dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: generatingVoices } });
+                  // 更新所有配音状态为生成中（用 ref 数组避免闭包中 generatingVoices 过期问题）
+                  const allVoicesRef = voices.map(v => ({ ...v, status: 'generating' as Voice['status'] }));
+                  dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: allVoicesRef } });
+
+                  let completedCount = 0;
+                  let failedCount = 0;
 
                   // 逐个生成配音
                   for (let i = 0; i < voices.length; i++) {
@@ -1620,7 +1623,7 @@ ${scriptList}
                     try {
                       // 检查是否包含 #角色名 格式
                       const hasCharacterTag = /#\S+/.test(voice.script);
-                      
+
                       if (hasCharacterTag) {
                         // 使用多角色TTS
                         // 构建角色名->音频文件名的映射
@@ -1631,7 +1634,7 @@ ${scriptList}
                             characterAudios[timbre.name] = audioFileName;
                           }
                         }
-                        
+
                         const result = await callComfyUITTSMultiCharacter(
                           voice.script,
                           narratorAudio,
@@ -1639,23 +1642,22 @@ ${scriptList}
                           voice.emotion || '无',
                           emotionAudio
                         );
-                        
-                        const newVoices = generatingVoices.map((v, idx) =>
-                          idx === i ? { ...v, status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl } : v
-                        );
-                        dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: newVoices } });
+
+                        allVoicesRef[i] = { ...allVoicesRef[i], status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl };
                       } else {
-                        // 使用旧版单角色TTS
-                        // 构建结构化文本（IndexTTS2 Pro 格式）
+                        // 单角色/旁白TTS
                         const isDialogue = voice.script.includes('「') && voice.script.includes('」');
                         let structuredText = voice.script;
+
                         if (isDialogue) {
                           // 转换「」格式为 <Character1> 格式
                           structuredText = voice.script
                             .replace(/「/g, '<Character1>')
                             .replace(/」/g, '</Character1>');
-                        } else {
-                          structuredText = `<Narrator>${voice.script}</Narrator>`;
+                        } else if (!structuredText.startsWith('<')) {
+                          // 防御性修复：没有 <Narrator> 标签时，按句子拆分后添加（解决纯旁白问题）
+                          const sentences = voice.script.split(/(?<=[。！？……])/).filter(s => s.trim());
+                          structuredText = sentences.map(s => `<Narrator>${s.trim()}`).join('');
                         }
 
                         const result = await callComfyUITTS(
@@ -1666,20 +1668,63 @@ ${scriptList}
                           emotionAudio
                         );
 
-                        const newVoices = generatingVoices.map((v, idx) =>
-                          idx === i ? { ...v, status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl } : v
-                        );
-                        dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: newVoices } });
+                        allVoicesRef[i] = { ...allVoicesRef[i], status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl };
                       }
+
+                      completedCount++;
+                      dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: [...allVoicesRef] } });
                     } catch (e: any) {
                       const errorMsg = e?.message || String(e) || '未知错误';
                       console.error('[TTS] 错误:', errorMsg);
-                      const newVoices = generatingVoices.map((v, idx) =>
-                        idx === i ? { ...v, status: 'failed' as Voice['status'], error: errorMsg } : v
-                      );
-                      dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: newVoices } });
-                      showToast('配音生成失败: ' + errorMsg.substring(0, 80), 'error');
+
+                      // 最多重试 2 次（指数退避）
+                      let retrySuccess = false;
+                      for (let retry = 1; retry <= 2 && !retrySuccess; retry++) {
+                        try {
+                          await new Promise(r => setTimeout(r, 2000 * retry));
+                          // 重试多角色和单角色逻辑（简化：复用上面逻辑）
+                          const hasCharacterTag = /#\S+/.test(voice.script);
+                          let result;
+                          if (hasCharacterTag) {
+                            const characterAudios: Record<string, string> = {};
+                            for (const timbre of (project.voiceTimbres || [])) {
+                              if (timbre.name && timbre.referenceAudio) {
+                                const audioFileName = timbre.referenceAudio.split('/').pop() || timbre.referenceAudio;
+                                characterAudios[timbre.name] = audioFileName;
+                              }
+                            }
+                            result = await callComfyUITTSMultiCharacter(voice.script, narratorAudio, characterAudios, voice.emotion || '无', emotionAudio);
+                          } else {
+                            const isDialogue = voice.script.includes('「') && voice.script.includes('」');
+                            let structuredText = voice.script;
+                            if (isDialogue) {
+                              structuredText = voice.script.replace(/「/g, '<Character1>').replace(/」/g, '</Character1>');
+                            } else if (!structuredText.startsWith('<')) {
+                              const sentences = voice.script.split(/(?<=[。！？……])/).filter(s => s.trim());
+                              structuredText = sentences.map(s => `<Narrator>${s.trim()}`).join('');
+                            }
+                            result = await callComfyUITTS(structuredText, narratorAudio, narratorAudio, voice.emotion || '无', emotionAudio);
+                          }
+                          allVoicesRef[i] = { ...allVoicesRef[i], status: 'completed' as Voice['status'], duration: result.duration || 5, audioUrl: result.audioUrl };
+                          retrySuccess = true;
+                          completedCount++;
+                        } catch {
+                          if (retry === 2) {
+                            allVoicesRef[i] = { ...allVoicesRef[i], status: 'failed' as Voice['status'], error: errorMsg };
+                            failedCount++;
+                          }
+                        }
+                      }
+
+                      dispatch({ type: 'UPDATE_PROJECT', payload: { ...project, voiceDubbings: [...allVoicesRef] } });
                     }
+                  }
+
+                  // 完成后显示汇总
+                  if (failedCount === 0) {
+                    showToast(`🎉 全部 ${completedCount} 条配音生成完成`, 'success');
+                  } else {
+                    showToast(`完成 ${completedCount} 条，失败 ${failedCount} 条（可单独重试）`, 'error');
                   }
                 }}
                 className="btn btn-primary"
