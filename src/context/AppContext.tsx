@@ -1097,20 +1097,6 @@ export function AppProvider({ children }: AppProviderProps) {
   ): Promise<{ audioUrl: string; duration: number }> => {
     const comfyuiUrl = state.config.basic.comfyuiVoiceUrl?.replace(/\/$/, '') || 'http://127.0.0.1:8188';
 
-    // 检查ComfyUI服务器上input目录的文件是否存在
-    // 使用Tauri后端发起请求，避免浏览器CORS限制；404视为文件不存在
-    const checkComfyUIFileExists = async (filename: string): Promise<boolean> => {
-      try {
-        await (window as any).__TAURI__.core.invoke('comfyui_get', {
-          url: `${comfyuiUrl}/api/view?filename=${encodeURIComponent(filename)}&type=input`
-        });
-        return true;
-      } catch (e: any) {
-        // 404或其他错误都视为文件不存在，Tauri后端统一处理CORS
-        console.log('[TTS] 音频文件不存在或无法访问:', filename, e?.message || e);
-        return false;
-      }
-    };
     const seed = Math.floor(Math.random() * 4294967295);
     console.log('[TTS] 开始生成多角色配音');
     console.log('[TTS] ComfyUI地址:', comfyuiUrl);
@@ -1133,47 +1119,41 @@ export function AppProvider({ children }: AppProviderProps) {
     const structuredText = convertToIndexTTSFormat(parts, characterMapping);
     console.log('[TTS] 转换后文本:', structuredText);
 
-    // 构建workflow节点
+    // 构建workflow节点（不再做文件存在性预检，简化为"有文件名就创建节点"）
+    // LoadAudio在ComfyUI端处理缺失文件，默认输出静默，不挂
     const workflow: any = {};
 
-    // 检查旁白音频是否存在——LoadAudio需要有效audio输入，空文件会导致输出噪音
-    const narratorFilePath = narratorAudio ? `input/${narratorAudio}` : '';
-    const narratorExists = narratorAudio ? await checkComfyUIFileExists(narratorAudio) : false;
-    if (narratorFilePath && narratorExists) {
+    // 旁白音频：有文件名就创建节点
+    if (narratorAudio) {
       workflow["load_narrator"] = { 
-        "inputs": { "audio": narratorFilePath },
+        "inputs": { "audio": `input/${narratorAudio}` },
         "class_type": "LoadAudio"
       };
     }
 
-    // 检查角色音频是否存在
+    // 角色音频：有文件名就创建节点
     const characterNodeIds: Record<string, string> = {};
-    for (const charName of characters.slice(0, 5)) {
+    characters.slice(0, 5).forEach((charName, index) => {
       const audioFilename = characterAudios?.[charName];
       if (audioFilename) {
-        const exists = await checkComfyUIFileExists(audioFilename);
-        if (exists) {
-          const nodeId = `load_character${Object.keys(characterNodeIds).length + 1}`;
-          workflow[nodeId] = { 
-            "inputs": { "audio": `input/${audioFilename}` },
-            "class_type": "LoadAudio"
-          };
-          characterNodeIds[charName] = nodeId;
-        }
+        const nodeId = `load_character${index + 1}`;
+        workflow[nodeId] = { 
+          "inputs": { "audio": `input/${audioFilename}` },
+          "class_type": "LoadAudio"
+        };
+        characterNodeIds[charName] = nodeId;
       }
-    }
+    });
 
-    // 检查情绪音频是否存在
-    const emotionFilePath = emotionAudio ? `input/${emotionAudio}` : '';
-    const emotionExists = emotionAudio ? await checkComfyUIFileExists(emotionAudio) : false;
-    if (emotionFilePath && emotionExists) {
+    // 情绪音频：有文件名就创建节点
+    if (emotionAudio) {
       workflow["load_emotion"] = { 
-        "inputs": { "audio": emotionFilePath },
+        "inputs": { "audio": `input/${emotionAudio}` },
         "class_type": "LoadAudio"
       };
     }
 
-    // IndexTTS2ProNode：只连接已创建的音频节点
+    // IndexTTS2ProNode
     const ttsInputs: any = {
       structured_text: structuredText,
       mode: "Auto",
@@ -1190,7 +1170,6 @@ export function AppProvider({ children }: AppProviderProps) {
       seed: seed,
     };
 
-    // 只有节点存在时才连接
     if (workflow["load_narrator"]) {
       ttsInputs.narrator_audio = ["load_narrator", 0];
     }
@@ -1198,15 +1177,12 @@ export function AppProvider({ children }: AppProviderProps) {
       ttsInputs.emotion_description = emotion;
     }
 
-    // 连接已验证存在的角色音频
-    for (const charName of characters.slice(0, 5)) {
+    characters.slice(0, 5).forEach((charName, index) => {
       if (characterNodeIds[charName]) {
-        const idx = Object.keys(characterNodeIds).indexOf(charName) + 1;
-        ttsInputs[`character${idx}_audio`] = [characterNodeIds[charName], 0];
+        ttsInputs[`character${index + 1}_audio`] = [characterNodeIds[charName], 0];
       }
-    }
+    });
 
-    // 连接情绪音频
     if (workflow["load_emotion"]) {
       ttsInputs.emo_ref_audio = ["load_emotion", 0];
     }
@@ -1298,18 +1274,6 @@ export function AppProvider({ children }: AppProviderProps) {
     console.log('[TTS] 旁白音频:', narratorAudio);
     console.log('[TTS] 角色音频:', characterAudio);
 
-    // 检查ComfyUI服务器上文件是否存在（LoadAudio需要有效audio输入，空文件会输出噪音）
-    const checkFileExists = async (filename: string): Promise<boolean> => {
-      try {
-        await (window as any).__TAURI__.core.invoke('comfyui_get', {
-          url: `${comfyuiUrl}/api/view?filename=${encodeURIComponent(filename)}&type=input`
-        });
-        return true;
-      } catch {
-        return false;
-      }
-    };
-
     const ttsNodeInputs: any = {
       structured_text: structuredText,
       mode: "Auto",
@@ -1330,27 +1294,21 @@ export function AppProvider({ children }: AppProviderProps) {
       ttsNodeInputs.emotion_description = emotion;
     }
 
-    // 构建workflow节点：只在音频文件真实存在时才创建LoadAudio节点
+    // 构建workflow节点：有文件名就创建LoadAudio节点，让ComfyUI处理缺失文件
     const workflow: any = {};
 
-    const narratorFilePath = narratorAudio ? `input/${narratorAudio}` : '';
-    const narratorExists = narratorAudio ? await checkFileExists(narratorAudio) : false;
-    if (narratorFilePath && narratorExists) {
-      workflow["load_narrator"] = { "inputs": { "audio": narratorFilePath }, "class_type": "LoadAudio" };
+    if (narratorAudio) {
+      workflow["load_narrator"] = { "inputs": { "audio": `input/${narratorAudio}` }, "class_type": "LoadAudio" };
       ttsNodeInputs.narrator_audio = ["load_narrator", 0];
     }
 
-    const charFilePath = characterAudio ? `input/${characterAudio}` : '';
-    const charExists = characterAudio ? await checkFileExists(characterAudio) : false;
-    if (charFilePath && charExists) {
-      workflow["load_character1"] = { "inputs": { "audio": charFilePath }, "class_type": "LoadAudio" };
+    if (characterAudio) {
+      workflow["load_character1"] = { "inputs": { "audio": `input/${characterAudio}` }, "class_type": "LoadAudio" };
       ttsNodeInputs.character1_audio = ["load_character1", 0];
     }
 
-    const emotionFilePath = emotionAudio ? `input/${emotionAudio}` : '';
-    const emotionExists = emotionAudio ? await checkFileExists(emotionAudio) : false;
-    if (emotionFilePath && emotionExists) {
-      workflow["load_emotion"] = { "inputs": { "audio": emotionFilePath }, "class_type": "LoadAudio" };
+    if (emotionAudio) {
+      workflow["load_emotion"] = { "inputs": { "audio": `input/${emotionAudio}` }, "class_type": "LoadAudio" };
       ttsNodeInputs.emo_ref_audio = ["load_emotion", 0];
     }
 
